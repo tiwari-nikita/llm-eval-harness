@@ -23,7 +23,7 @@ router.py            ranks models per category from /scores + /preference
 ## Setup
 
 ```
-pip install requests pyyaml datasets pandas pyarrow pytest
+pip install -r requirements.txt
 ```
 
 Run the test suite (mocks all network calls, no API key needed):

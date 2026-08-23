@@ -1,0 +1,6 @@
+requests
+pyyaml
+datasets
+pandas
+pyarrow
+pytest
