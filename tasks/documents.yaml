@@ -1,0 +1,74 @@
+# Objective document tasks: editing, summarizing, extracting from a given
+# text. Binary checklist grading. Sample file — extend with your own.
+
+- id: documents_001
+  category: documents
+  prompt: |
+    Here is a paragraph from a draft cover letter:
+
+    "I am writing to express my strong interest in the Data Analyst
+    position at your company. I believe that my skills and experience make
+    me a great fit for this role, and I am confident that I would be able
+    to contribute significantly to your team's success going forward in
+    this position."
+
+    Rewrite it to be half the length without losing the core claim.
+  criteria:
+    - id: c1
+      text: output word count is at most half of the original (original is
+        59 words, so 30 words or fewer)
+      type: format
+    - id: c2
+      text: keeps the applicant's claim of being a strong fit for the role
+      type: content
+    - id: c3
+      text: removes at least two of the redundant hedging phrases ("I
+        believe that", "I am confident that", "going forward")
+      type: content
+    - id: c4
+      text: does not introduce a new claim (specific skill, years of
+        experience, company name) that was not in the original
+      type: reasoning
+  hard_fail:
+    - invents a specific skill, employer, or credential not present in the
+      source paragraph
+  notes: >
+    Checks literal compliance with a measurable constraint (word count)
+    alongside a content-preservation constraint that pulls in the opposite
+    direction, since cutting for length and keeping the claim intact are in
+    tension.
+
+- id: documents_002
+  category: documents
+  prompt: |
+    Extract every date and every dollar amount mentioned in this text, as a
+    plain list. If something is ambiguous (e.g. "next quarter"), list it
+    separately and mark it as relative, don't resolve it to a calendar date.
+
+    "The pilot launched in March 2023 with a $50,000 budget. By the end of
+    Q2 we'd spent $38,500. We're asking for another $75k to get through
+    next quarter, and the board meets on the 14th to decide."
+  criteria:
+    - id: c1
+      text: lists all three absolute dollar amounts ($50,000; $38,500;
+        $75k/$75,000) with none missing or duplicated
+      type: content
+    - id: c2
+      text: lists March 2023 as an absolute date
+      type: content
+    - id: c3
+      text: flags "Q2", "next quarter", and "the 14th" as relative/ambiguous
+        rather than silently resolving them to specific calendar dates
+      type: reasoning
+    - id: c4
+      text: output is a list/structured format, not prose
+      type: format
+  hard_fail:
+    - invents a date or dollar amount not present in the source text
+    - silently resolves "the 14th" or "next quarter" to a specific calendar
+      date not stated in the source
+  notes: >
+    The hard_fail on silent resolution matters more than it looks: a fluent
+    model will often "helpfully" infer a calendar date for "the 14th" and
+    that's exactly the fabrication-under-confidence pattern this category
+    exists to catch.

@@ -1,0 +1,33 @@
+# Provider config for runner.py. All three expose an OpenAI-compatible
+# /chat/completions endpoint, so the runner needs exactly one HTTP client.
+#
+# Model IDs on free tiers change often and are the most likely thing here
+# to be stale by the time you read this. Verify against the provider's
+# current docs before a real run; the runner will surface a clear HTTP
+# error (404/400 on unknown model) rather than fail silently either way.
+#
+# Set the API key as an environment variable, never in this file:
+#   setx GROQ_API_KEY "..."      (new shells only, or use $env: for this one)
+#   $env:GROQ_API_KEY = "..."
+#
+# No provider here requires a card for the tier used.
+
+groq:
+  base_url: https://api.groq.com/openai/v1
+  api_key_env: GROQ_API_KEY
+  models:
+    - llama-3.1-8b-instant
+    - llama-3.3-70b-versatile
+
+openrouter:
+  base_url: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  models:
+    - meta-llama/llama-3.1-8b-instruct:free
+    - google/gemma-2-9b-it:free
+
+google:
+  base_url: https://generativelanguage.googleapis.com/v1beta/openai
+  api_key_env: GOOGLE_API_KEY
+  models:
+    - gemini-1.5-flash

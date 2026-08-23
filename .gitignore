@@ -1,0 +1,17 @@
+/prompts
+/runs
+
+# personal-only preference data (advisory_personal etc.) never gets committed
+/preference/personal_*
+
+# local corpus pulls and caches
+*.jsonl
+wildchat_*_summary.txt
+.cache/
+
+__pycache__/
+*.pyc
+
+# secrets
+.env
+*api_key*
