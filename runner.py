@@ -25,6 +25,8 @@ from pathlib import Path
 import requests
 import yaml
 
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 RUNS_DIR = Path(__file__).parent / "runs"
 
 

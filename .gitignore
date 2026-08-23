@@ -8,6 +8,7 @@
 *.jsonl
 wildchat_*_summary.txt
 .cache/
+.openrouter_catalogue_cache.json
 
 __pycache__/
 *.pyc

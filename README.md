@@ -13,8 +13,11 @@ rationale is in [eval-spec.md](eval-spec.md).
 /scores       graded objective results
 /preference   blind pairwise votes
 /router       selection logic reading /scores and /preference
-providers.yaml   model/endpoint config for runner.py
-runner.py     sends task turns to models, saves transcripts
+providers.yaml    model/endpoint config for runner.py
+runner.py         sends task turns to models, saves transcripts
+score_objective.py  model-graded + hand-sample grading for research/documents
+vote_pairwise.py     blind pairwise voting CLI for advisory/personal
+router.py            ranks models per category from /scores + /preference
 ```
 
 ## Setup
@@ -34,6 +37,20 @@ IDs drift — check the provider's current docs if a model returns 404.
 python runner.py --task tasks/advisory.yaml --providers groq
 python analyze_corpus.py --hf allenai/WildChat-1M --limit 500
 python extract_prompts.py my_export.json -o prompts/mine.jsonl
+
+# grade an objective run, then hand-check a sample of the grades
+python score_objective.py grade --task tasks/research.yaml \
+    --grader-provider groq --grader-model llama-3.3-70b-versatile
+python score_objective.py hand-sample --fraction 0.15
+
+# blind pairwise vote between two advisory transcripts
+python vote_pairwise.py --transcripts runs/advisory_001__groq_A.json runs/advisory_001__openrouter_B.json \
+    --task-file tasks/advisory.yaml
+
+# check whether the OpenRouter models in providers.yaml are still free, then rank
+python router.py check-catalogue
+python router.py rank --category advisory
+python router.py rank --category research
 ```
 
 ## Known limitations (by design, not oversight)
@@ -49,6 +66,14 @@ python extract_prompts.py my_export.json -o prompts/mine.jsonl
 - **Personal category is local-only.** `preference/personal_*` and
   `/prompts` never get committed, by `.gitignore`, because they're private
   conversations, not test fixtures.
+- **Router's "free and within quota" is partial.** OpenRouter publishes a
+  live per-model free/paid flag (`router.py check-catalogue` checks it for
+  real), so that half is genuinely verified against a maintained catalogue.
+  Groq and Google AI Studio don't expose an equivalent per-model endpoint —
+  their free tier is an account-level rate limit — so the router trusts
+  `providers.yaml` for those two rather than faking a live check. There is
+  also no live per-key quota/usage API wired up anywhere yet; the router
+  reports quota as "unknown" rather than pretending otherwise.
 - **Taxonomy is heuristic.** The regex bucket classifier in `taxonomy.py`
   is wrong on a real, non-trivial share of turns (see below) — good enough
   for a distribution, not for scoring. Hand-check samples per bucket before
