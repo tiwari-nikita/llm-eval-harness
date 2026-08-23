@@ -23,7 +23,13 @@ router.py            ranks models per category from /scores + /preference
 ## Setup
 
 ```
-pip install requests pyyaml datasets pandas pyarrow
+pip install requests pyyaml datasets pandas pyarrow pytest
+```
+
+Run the test suite (mocks all network calls, no API key needed):
+
+```
+python -m pytest
 ```
 
 Set at least one provider's API key as an environment variable (see

@@ -12,6 +12,7 @@ wildchat_*_summary.txt
 
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # secrets
 .env
