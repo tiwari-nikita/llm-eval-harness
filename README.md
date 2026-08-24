@@ -104,6 +104,35 @@ unauthenticated, see `wildchat_500_summary.txt`):
   typical usage — don't treat WildChat's distribution as ground truth for
   "how people use models," only as one public reference point.
 
+### Live runs so far (Groq, 2026-08-24)
+
+The only provider with a live key so far is Groq (`openai/gpt-oss-120b` vs
+`openai/gpt-oss-20b`). What's real and committed:
+
+- 6 advisory transcripts + 6 personal transcripts (3 tasks × 2 models each),
+  all 5 turns, no empty replies. Ready for blind pairwise voting; none cast
+  yet — that step needs a human, not the harness.
+- 12 objective transcripts (research + documents, 4 documents tasks × 2
+  models + 2 research tasks × 2 models) with a completed automated grading
+  pass:
+
+  | category  | gpt-oss-120b | gpt-oss-20b |
+  |-----------|-------------:|------------:|
+  | research  | 0.58         | 0.38        |
+  | documents | 0.88         | 0.62        |
+
+- **The model grader is not fully deterministic.** Re-running the grader on
+  an unchanged transcript (`documents_001`/gpt-oss-20b) flipped one
+  criterion and changed the score from 1.00 to 0.75 between two grading
+  passes with no other input changed. This is exactly why eval-spec.md
+  requires hand-checking a random 15% and reporting the disagreement rate
+  rather than trusting a single automated pass — that hand-check hasn't
+  been run yet.
+- The grader used above (`gpt-oss-120b`) is the same model family as both
+  models being graded, since Groq is the only provider with a key so far.
+  Take the scores as a pipeline validation, not a trustworthy ranking,
+  until a second provider's key is added and/or the hand-check is done.
+
 ## Grading
 
 Objective sets (`research.yaml`, `documents.yaml`): binary checklist per
