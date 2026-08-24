@@ -121,8 +121,14 @@ def cmd_grade(args):
         answer = transcript["exchanges"][0]["assistant"]
 
         grading_prompt = build_grading_prompt(task, answer)
+        # Grading prompts are longer than a normal conversational turn (full
+        # answer + criteria + instructions), so gpt-oss models can burn the
+        # default 250-token budget entirely on hidden reasoning and return
+        # empty content even with reasoning_effort=low. Give the grader more
+        # room; the verdict itself is a short JSON object either way.
         raw = call_model(cfg["base_url"], api_key, args.grader_model,
-                          [{"role": "user", "content": grading_prompt}])
+                          [{"role": "user", "content": grading_prompt}],
+                          max_tokens=600)
         try:
             verdict = extract_json(raw)
         except (ValueError, json.JSONDecodeError) as e:

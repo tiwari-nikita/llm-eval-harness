@@ -1,0 +1,17 @@
+{
+  "task_id": "research_002",
+  "provider": "groq",
+  "model": "openai/gpt-oss-20b",
+  "run_index": 0,
+  "score": 0.0,
+  "criteria_met": {
+    "c1": false,
+    "c2": false,
+    "c3": false
+  },
+  "hard_fail_triggered": false,
+  "hard_fail_reason": null,
+  "grader_provider": "groq",
+  "grader_model": "openai/gpt-oss-120b",
+  "source_transcript": "research_002__groq_openai_gpt-oss-20b__run0.json"
+}
