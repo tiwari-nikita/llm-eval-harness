@@ -34,8 +34,9 @@ def test_call_model_single_success(mock_post):
     assert out == "hello"
 
 
+@patch("runner.time.sleep", return_value=None)
 @patch("runner.call_model")
-def test_run_one_builds_growing_message_history(mock_call_model):
+def test_run_one_builds_growing_message_history(mock_call_model, _sleep):
     # each call returns a distinct reply so we can check history grew correctly
     replies = iter(["reply1", "reply2", "reply3"])
     mock_call_model.side_effect = lambda base_url, api_key, model, messages: next(replies)
@@ -53,8 +54,9 @@ def test_run_one_builds_growing_message_history(mock_call_model):
     assert user_turns == ["turn a", "turn b", "turn c"]
 
 
+@patch("runner.time.sleep", return_value=None)
 @patch("runner.call_model")
-def test_run_one_single_turn_task_uses_prompt(mock_call_model):
+def test_run_one_single_turn_task_uses_prompt(mock_call_model, _sleep):
     mock_call_model.return_value = "the answer"
     task = {"id": "research_001", "prompt": "what is x"}
     result = run_one(task, "groq", {"base_url": "http://x"}, "model-x", "key", 0)
