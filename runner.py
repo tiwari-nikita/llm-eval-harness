@@ -47,10 +47,23 @@ def safe_slug(text):
     return re.sub(r"[^a-zA-Z0-9_.-]+", "_", text)
 
 
-def call_model(base_url, api_key, model, messages, timeout=60, max_retries=4):
+def call_model(base_url, api_key, model, messages, timeout=60, max_retries=4, max_tokens=250):
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {"model": model, "messages": messages}
+    # max_tokens caps reply length. Without it, reasoning models on Groq's free
+    # tier (gpt-oss, qwen3.6) return thousands of tokens of visible <think>
+    # trace per turn, which (a) gets appended back into a multi-turn history
+    # and quickly trips a 413 on later turns, and (b) burns free-tier quota
+    # fast enough to trip 429s across a short run.
+    payload = {"model": model, "messages": messages, "max_tokens": max_tokens}
+    if "gpt-oss" in model:
+        # gpt-oss models spend the whole max_tokens budget on a hidden
+        # <reasoning> trace before emitting any visible content, so at a
+        # small max_tokens (needed to survive the TPM cap) content comes
+        # back empty. reasoning_effort="low" fixes that; it's a field this
+        # model family understands and other providers ignore/reject
+        # unknown fields differently, so keep it scoped to gpt-oss only.
+        payload["reasoning_effort"] = "low"
 
     for attempt in range(max_retries):
         resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
@@ -77,6 +90,7 @@ def run_one(task, provider_name, provider_cfg, model, api_key, run_index):
         reply = call_model(provider_cfg["base_url"], api_key, model, messages)
         messages.append({"role": "assistant", "content": reply})
         exchanges.append({"user": turn_text, "assistant": reply})
+        time.sleep(12)  # 8000 TPM cap on this account is the binding limit, not RPM
 
     return {
         "task_id": task["id"],

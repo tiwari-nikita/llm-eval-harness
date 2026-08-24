@@ -15,9 +15,14 @@
 groq:
   base_url: https://api.groq.com/openai/v1
   api_key_env: GROQ_API_KEY
+  # llama-3.1-8b-instant / llama-3.3-70b-versatile (the previous entries here)
+  # both 404 as of 2026-08-22 — Groq had retired them. Replaced after
+  # checking the live list with `curl .../v1/models`. Re-check the same way
+  # if this 404s again; free-tier model IDs are the least stable part of
+  # any of these configs.
   models:
-    - llama-3.1-8b-instant
-    - llama-3.3-70b-versatile
+    - openai/gpt-oss-120b
+    - openai/gpt-oss-20b
 
 openrouter:
   base_url: https://openrouter.ai/api/v1

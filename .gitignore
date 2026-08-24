@@ -4,6 +4,9 @@
 # personal-only preference data (advisory_personal etc.) never gets committed
 /preference/personal_*
 
+# the personal task file is built from real private chat history, never ships
+/tasks/personal.yaml
+
 # local corpus pulls and caches
 *.jsonl
 wildchat_*_summary.txt
