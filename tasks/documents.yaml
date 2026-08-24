@@ -72,3 +72,91 @@
     model will often "helpfully" infer a calendar date for "the 14th" and
     that's exactly the fabrication-under-confidence pattern this category
     exists to catch.
+
+- id: documents_003
+  category: documents
+  prompt: |
+    I wrote a browser extension that automatically likes tweets. When it
+    runs, my console shows these errors:
+
+    "Uncaught (in promise) Error: Could not establish connection. Receiving
+    end does not exist."
+    "Uncaught (in promise) Error: A listener indicated an asynchronous
+    response by returning true, but the message channel closed before a
+    response was received."
+
+    What's actually going on here, and what should I change?
+  criteria:
+    - id: c1
+      text: identifies that "Receiving end does not exist" means a message
+        was sent but no listener was there to receive it on the other side
+        (e.g. content script not injected/loaded yet, or wrong tab)
+      type: content
+    - id: c2
+      text: identifies that the second error means a listener returned
+        `true` (signaling an async response) but never actually called
+        sendResponse before the channel closed
+      type: content
+    - id: c3
+      text: treats the two errors as two distinct causes rather than
+        collapsing them into one explanation
+      type: reasoning
+    - id: c4
+      text: gives a concrete fix direction (only return true when you will
+        call sendResponse; guard against sending to tabs/frames with no
+        listener) rather than a generic "check your code" answer
+      type: content
+  hard_fail:
+    - invents a specific Chrome extension API method or manifest field that
+      does not exist
+    - claims this pair of errors means the extension was rejected or
+      blocked by the Chrome Web Store
+  notes: >
+    Grounded in a real error pasted into a real chat by the corpus owner.
+    Tests whether the model treats two commonly-conflated Chrome extension
+    messaging errors as the same thing (wrong) or correctly separates "no
+    listener present" from "listener present but never responded."
+
+- id: documents_004
+  category: documents
+  prompt: |
+    Explain these browser console warnings and tell me whether I need to do
+    anything about them:
+
+    "SES The 'dateTaming' option is deprecated and does nothing. In the
+    future specifying it will be an error."
+    "SES The 'mathTaming' option is deprecated and does nothing. In the
+    future specifying it will be an error."
+    "SES Removing unpermitted intrinsics
+      Removing intrinsics.%DatePrototype%.toTemporalInstant"
+  criteria:
+    - id: c1
+      text: identifies SES (Secure ECMAScript / "lockdown") as a JavaScript
+        hardening mechanism, not a bug in the user's own page code
+      type: content
+    - id: c2
+      text: correctly attributes the warnings to a browser extension (most
+        commonly a crypto wallet like MetaMask) applying lockdown, not to
+        the website the user is looking at
+      type: content
+    - id: c3
+      text: states these are deprecation warnings about options that no
+        longer do anything, not runtime errors that break the page
+      type: reasoning
+    - id: c4
+      text: gives a plain-language "do you need to act on this" answer
+        (generally no, unless the user is the one authoring the extension
+        applying lockdown)
+      type: content
+  hard_fail:
+    - attributes the warnings to a specific library or package name other
+      than SES/lockdown (e.g. inventing an unrelated npm package as the
+      cause)
+    - claims the warnings indicate a security vulnerability in the user's
+      own website code
+  notes: >
+    Grounded in a real "explain these errors" prompt from the corpus. The
+    log line format (SES ... lockdown-install.js) is distinctive enough
+    that a model with real knowledge of it should recognize the source
+    (wallet-extension lockdown) rather than guessing generically about
+    "JavaScript strict mode" or similar near-misses.

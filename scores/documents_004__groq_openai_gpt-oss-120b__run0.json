@@ -1,18 +1,18 @@
 {
-  "task_id": "documents_001",
+  "task_id": "documents_004",
   "provider": "groq",
-  "model": "openai/gpt-oss-20b",
+  "model": "openai/gpt-oss-120b",
   "run_index": 0,
   "score": 0.75,
   "criteria_met": {
     "c1": true,
-    "c2": true,
+    "c2": false,
     "c3": true,
-    "c4": false
+    "c4": true
   },
   "hard_fail_triggered": false,
   "hard_fail_reason": null,
   "grader_provider": "groq",
   "grader_model": "openai/gpt-oss-120b",
-  "source_transcript": "documents_001__groq_openai_gpt-oss-20b__run0.json"
+  "source_transcript": "documents_004__groq_openai_gpt-oss-120b__run0.json"
 }
