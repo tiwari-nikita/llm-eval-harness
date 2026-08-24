@@ -28,12 +28,14 @@ openrouter:
   base_url: https://openrouter.ai/api/v1
   api_key_env: OPENROUTER_API_KEY
   # Verified against https://openrouter.ai/api/v1/models (live, pricing=0)
-  # on 2026-08-22. This list drifts fast — run `python router.py
+  # on 2026-08-24. This list drifts fast — run `python router.py
   # check-catalogue` before a real run, it flags any model here that's no
-  # longer free.
+  # longer free. nvidia/nemotron-3-nano-30b-a3b:free (previous entry here)
+  # fell off the free list between 2026-08-22 and 2026-08-24; swapped for
+  # its apparent successor.
   models:
     - google/gemma-4-31b-it:free
-    - nvidia/nemotron-3-nano-30b-a3b:free
+    - nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
 
 google:
   base_url: https://generativelanguage.googleapis.com/v1beta/openai
