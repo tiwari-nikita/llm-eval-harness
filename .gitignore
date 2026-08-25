@@ -23,3 +23,6 @@ __pycache__/
 
 # chat-driven blind-vote state (A/B mapping, must stay hidden until the vote)
 .vote_state/
+
+# rendered blind vote pairs (contain personal task text; local only)
+.vote_view/
