@@ -33,6 +33,12 @@ RUNS_DIR = Path(__file__).parent / "runs"
 # account reports. Override with --tpm for a provider with a different cap.
 DEFAULT_TPM = 8000
 DEFAULT_MAX_TOKENS = 1200
+# How long a per-day 429 may be waited out before the run gives up, and how
+# many times. Groq's TPD is a rolling window, not a midnight reset, so
+# headroom returns in minutes -- but a genuinely exhausted day should not
+# hold a run open for hours.
+DEFAULT_MAX_QUOTA_WAIT = 2700
+DEFAULT_MAX_QUOTA_WAITS = 3
 
 
 def load_providers(path):
@@ -153,6 +159,24 @@ def estimate_tokens(messages, max_tokens):
     return chars // 4 + max_tokens
 
 
+_RETRY_HINT_RE = re.compile(r"try again in\s+([0-9hms.]+)", re.I)
+
+
+def parse_retry_hint(body):
+    """Seconds from a rate-limit body's "Please try again in 34m29.2s".
+
+    Parsed from that phrase specifically rather than the whole body, because
+    the same message carries bare numbers ("Limit 200000, Used 198674") that a
+    looser duration scan would happily misread as a wait.
+    """
+    if not body:
+        return None
+    m = _RETRY_HINT_RE.search(body)
+    if not m:
+        return None
+    return parse_duration(m.group(1))
+
+
 def is_daily_quota_error(resp):
     """True when a 429 is a per-day cap rather than a per-minute one.
 
@@ -168,7 +192,9 @@ def is_daily_quota_error(resp):
 
 
 def call_model(base_url, api_key, model, messages, timeout=120, max_retries=6,
-               max_tokens=DEFAULT_MAX_TOKENS, budget=None, max_backoff=120):
+               max_tokens=DEFAULT_MAX_TOKENS, budget=None, max_backoff=120,
+               max_quota_wait=DEFAULT_MAX_QUOTA_WAIT,
+               max_quota_waits=DEFAULT_MAX_QUOTA_WAITS):
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {"Authorization": "Bearer " + api_key, "Content-Type": "application/json"}
     # max_tokens caps reply length. It has to be generous enough that the
@@ -189,15 +215,33 @@ def call_model(base_url, api_key, model, messages, timeout=120, max_retries=6,
     if budget is not None:
         budget.reserve(estimate_tokens(messages, max_tokens))
 
+    quota_waits = 0
     for attempt in range(max_retries):
         resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
         if resp.status_code == 429 and is_daily_quota_error(resp):
-            # Retrying this is pointless -- the window is a day, not a minute.
-            # Before this check the runner spent 6 attempts and ~12 minutes per
-            # task discovering that, then repeated it for every task left in
-            # the run.
-            raise DailyQuotaExceeded(
-                "{} daily token quota exhausted: {}".format(model, resp.text[:300]))
+            # A per-day 429 must not be retried on the per-minute schedule --
+            # that burned 6 attempts and ~12 minutes per task, then repeated
+            # for every task still queued. But it is not "come back tomorrow"
+            # either: Groq's TPD is a rolling window, so headroom returns in
+            # minutes as old usage ages out. Measured 2026-08-25, a 7000-token
+            # request succeeded seconds after a 3000-token one was rejected.
+            # So wait out a short, server-quoted delay, and give up only when
+            # the day is genuinely gone.
+            hint = parse_duration(resp.headers.get("retry-after"))
+            if hint is None:
+                hint = parse_retry_hint(resp.text)
+            if hint is None or hint > max_quota_wait or quota_waits >= max_quota_waits:
+                raise DailyQuotaExceeded(
+                    "{} daily token quota exhausted{}: {}".format(
+                        model,
+                        "" if hint is None else " for at least {:.0f}m".format(hint / 60),
+                        resp.text[:300]))
+            quota_waits += 1
+            print("    [429] per-day quota saturated; waiting {:.0f}s "
+                  "({}/{})".format(hint, quota_waits, max_quota_waits),
+                  file=sys.stderr)
+            time.sleep(hint + 5)
+            continue
 
         if resp.status_code == 429 or resp.status_code >= 500:
             # A tokens-per-minute limit clears on the provider's clock, not
@@ -241,7 +285,8 @@ def call_model(base_url, api_key, model, messages, timeout=120, max_retries=6,
 
 
 def run_one(task, provider_name, provider_cfg, model, api_key, run_index,
-            max_tokens=DEFAULT_MAX_TOKENS, budget=None, system=None):
+            max_tokens=DEFAULT_MAX_TOKENS, budget=None, system=None,
+            max_quota_wait=DEFAULT_MAX_QUOTA_WAIT):
     is_multiturn = "turns" in task
     turns = task["turns"] if is_multiturn else [task["prompt"]]
 
@@ -252,7 +297,8 @@ def run_one(task, provider_name, provider_cfg, model, api_key, run_index,
     for turn_text in turns:
         messages.append({"role": "user", "content": turn_text})
         reply = call_model(provider_cfg["base_url"], api_key, model, messages,
-                           max_tokens=max_tokens, budget=budget)
+                           max_tokens=max_tokens, budget=budget,
+                           max_quota_wait=max_quota_wait)
         messages.append({"role": "assistant", "content": reply["content"]})
         exchanges.append({
             "user": turn_text,
@@ -311,6 +357,9 @@ def main():
                           "not the model, decides where answers end")
     ap.add_argument("--tpm", type=int, default=DEFAULT_TPM,
                      help="account-wide tokens-per-minute cap to pace against")
+    ap.add_argument("--max-quota-wait", type=int, default=DEFAULT_MAX_QUOTA_WAIT,
+                     help="longest per-day-quota delay to wait out, in "
+                          "seconds, before abandoning the run")
     ap.add_argument("--skip-existing", action="store_true",
                      help="skip pairs that already have a healthy transcript, "
                           "so a run aborted by a quota can be resumed without "
@@ -389,7 +438,8 @@ def main():
                 try:
                     result = run_one(task, pname, cfg, model, api_key, run_index,
                                      max_tokens=args.max_tokens, budget=budget,
-                                     system=system)
+                                     system=system,
+                                     max_quota_wait=args.max_quota_wait)
                     truncated_total += result["n_truncated"]
                 except DailyQuotaExceeded as e:
                     print(f"\n  ABORTING: {e}", file=sys.stderr)

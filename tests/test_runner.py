@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock, PropertyMock
 
 from runner import (DailyQuotaExceeded, TokenBudget, call_model, estimate_tokens,
                     has_healthy_transcript, is_daily_quota_error, parse_duration,
-                    run_one, safe_slug)
+                    parse_retry_hint, run_one, safe_slug)
 
 
 def _resp(status_code, content=None, finish_reason="stop", total_tokens=None,
@@ -416,3 +416,97 @@ def test_has_healthy_transcript_false_for_corrupt_json(tmp_path):
     p = tmp_path / "t.json"
     p.write_text("{not json", encoding="utf-8")
     assert has_healthy_transcript(p) is False
+
+
+# --- a per-day quota is a rolling window, not a midnight reset --------------
+
+GROQ_TPD_WITH_HINT = (
+    '{"error":{"message":"Rate limit reached for model `openai/gpt-oss-120b` in '
+    'organization `org_x` service tier `on_demand` on tokens per day (TPD): '
+    'Limit 200000, Used 198674, Requested 6116. Please try again in 34m29.2s. '
+    'Need more tokens? Upgrade to Dev Tier today at https://example."}}'
+)
+
+
+def test_parse_retry_hint_reads_the_quoted_delay():
+    assert parse_retry_hint(GROQ_TPD_WITH_HINT) == pytest.approx(2069.2)
+
+
+def test_parse_retry_hint_ignores_the_bare_numbers_in_the_same_message():
+    """"Limit 200000, Used 198674" sits in the same string; a looser duration
+    scan would read one of those as a wait."""
+    hint = parse_retry_hint(GROQ_TPD_WITH_HINT)
+    assert hint < 3600
+
+
+def test_parse_retry_hint_returns_none_without_the_phrase():
+    assert parse_retry_hint(GROQ_TPD_BODY) is None
+    assert parse_retry_hint("") is None
+    assert parse_retry_hint(None) is None
+
+
+@patch("runner.time.sleep", return_value=None)
+@patch("runner.requests.post")
+def test_daily_quota_is_waited_out_when_the_delay_is_short(mock_post, mock_sleep):
+    """Measured 2026-08-25: a 7000-token request succeeded seconds after a
+    3000-token one was rejected, because headroom ages back in. Aborting on
+    the first per-day 429 threw away a run that would have completed."""
+    mock_post.side_effect = [_resp_429(GROQ_TPD_WITH_HINT), _resp(200, "made it")]
+    out = call_model("http://fake", "key", "m", [{"role": "user", "content": "hi"}])
+    assert out["content"] == "made it"
+    assert mock_sleep.call_args_list[0].args[0] == pytest.approx(2074.2)
+
+
+@patch("runner.time.sleep", return_value=None)
+@patch("runner.requests.post")
+def test_daily_quota_gives_up_when_the_delay_is_too_long(mock_post, mock_sleep):
+    """A genuinely exhausted day must not hold the run open for hours."""
+    mock_post.return_value = _resp_429(GROQ_TPD_WITH_HINT)
+    with pytest.raises(DailyQuotaExceeded):
+        call_model("http://fake", "key", "m", [{"role": "user", "content": "hi"}],
+                   max_quota_wait=600)
+    assert mock_post.call_count == 1
+    assert mock_sleep.call_count == 0
+
+
+@patch("runner.time.sleep", return_value=None)
+@patch("runner.requests.post")
+def test_daily_quota_waits_are_bounded(mock_post, mock_sleep):
+    """Otherwise a saturated window could loop until max_retries ran out."""
+    mock_post.return_value = _resp_429(GROQ_TPD_WITH_HINT)
+    with pytest.raises(DailyQuotaExceeded):
+        call_model("http://fake", "key", "m", [{"role": "user", "content": "hi"}],
+                   max_quota_waits=2)
+    assert mock_post.call_count == 3  # two waits, then the giving-up attempt
+
+
+@patch("runner.time.sleep", return_value=None)
+@patch("runner.requests.post")
+def test_daily_quota_without_any_hint_still_aborts_at_once(mock_post, mock_sleep):
+    """No quoted delay means no evidence the window will clear soon."""
+    mock_post.return_value = _resp_429(GROQ_TPD_BODY)
+    with pytest.raises(DailyQuotaExceeded):
+        call_model("http://fake", "key", "m", [{"role": "user", "content": "hi"}])
+    assert mock_post.call_count == 1
+    assert mock_sleep.call_count == 0
+
+
+@patch("runner.time.sleep", return_value=None)
+@patch("runner.requests.post")
+def test_retry_after_header_wins_over_the_body_hint(mock_post, mock_sleep):
+    mock_post.side_effect = [
+        _resp_429(GROQ_TPD_WITH_HINT, {"retry-after": "30"}),
+        _resp(200, "ok"),
+    ]
+    call_model("http://fake", "key", "m", [{"role": "user", "content": "hi"}])
+    assert mock_sleep.call_args_list[0].args[0] == pytest.approx(35.0)
+
+
+@patch("runner.time.sleep", return_value=None)
+@patch("runner.requests.post")
+def test_daily_quota_message_reports_how_long_the_day_is_gone(mock_post, _sleep):
+    mock_post.return_value = _resp_429(GROQ_TPD_WITH_HINT)
+    with pytest.raises(DailyQuotaExceeded) as exc:
+        call_model("http://fake", "key", "m", [{"role": "user", "content": "hi"}],
+                   max_quota_wait=600)
+    assert "34m" in str(exc.value)
