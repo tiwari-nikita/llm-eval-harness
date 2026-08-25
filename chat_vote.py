@@ -51,11 +51,37 @@ def find_pair(task_id):
     return [Path(p) for p in files]
 
 
+def transcript_meta(t):
+    """Per-transcript facts a later reader needs to interpret the vote.
+
+    Truncation is deliberately recorded rather than prevented here. On
+    2026-08-25 gpt-oss-120b ignored the 350-word brevity instruction that
+    gpt-oss-20b followed, and hit the cap on 2 of 5 turns as a result. The
+    decision was to let that count against it -- both models got the same
+    instruction -- but only if the record says so, otherwise a later reader
+    would reasonably mistake it for the harness truncation bug that was
+    fixed the same day.
+    """
+    exchanges = t.get("exchanges") or []
+    return {
+        "max_tokens": t.get("max_tokens"),
+        "n_truncated": t.get("n_truncated"),
+        "n_turns": len(exchanges),
+        "truncated_turns": [i for i, e in enumerate(exchanges, 1) if e.get("truncated")],
+        "completion_tokens": [e.get("completion_tokens") for e in exchanges],
+        "system": t.get("system"),
+    }
+
+
 def cmd_show(args):
     files = find_pair(args.task_id)
     transcripts = [json.load(open(f, encoding="utf-8")) for f in files]
     if transcripts[0]["task_id"] != transcripts[1]["task_id"]:
         sys.exit("transcripts are for different tasks")
+    for f, t in zip(files, transcripts):
+        if not t.get("exchanges"):
+            sys.exit(f"{f} has no exchanges (error record: "
+                     f"{str(t.get('error'))[:120]}); re-run it before voting")
 
     order = [0, 1]
     if random.SystemRandom().random() < 0.5:
@@ -111,6 +137,8 @@ def cmd_record(args):
         "model_b": identity_b,
         "votes": votes,
         "elicited_via": "chat",
+        "transcript_a_meta": transcript_meta(shown[0]),
+        "transcript_b_meta": transcript_meta(shown[1]),
     }
 
     prefix = "personal_" if args.category == "personal" else ""
