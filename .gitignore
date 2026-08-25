@@ -20,3 +20,6 @@ __pycache__/
 # secrets
 .env
 *api_key*
+
+# chat-driven blind-vote state (A/B mapping, must stay hidden until the vote)
+.vote_state/
