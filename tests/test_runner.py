@@ -1,8 +1,11 @@
+import json
+
 import pytest
 from unittest.mock import patch, MagicMock, PropertyMock
 
 from runner import (DailyQuotaExceeded, TokenBudget, call_model, estimate_tokens,
-                    is_daily_quota_error, parse_duration, run_one, safe_slug)
+                    has_healthy_transcript, is_daily_quota_error, parse_duration,
+                    run_one, safe_slug)
 
 
 def _resp(status_code, content=None, finish_reason="stop", total_tokens=None,
@@ -381,3 +384,35 @@ def test_call_model_still_retries_a_per_minute_429(mock_post, mock_sleep):
     assert mock_post.call_count == 2
     assert mock_sleep.call_count == 1
 
+
+# --- resuming an aborted run ------------------------------------------------
+
+def test_has_healthy_transcript_true_for_a_real_run(tmp_path):
+    p = tmp_path / "t.json"
+    p.write_text(json.dumps({"task_id": "a", "exchanges": [{"user": "u", "assistant": "a"}]}),
+                 encoding="utf-8")
+    assert has_healthy_transcript(p) is True
+
+
+def test_has_healthy_transcript_false_for_an_error_record(tmp_path):
+    """The bug this guards: a quota-killed run still writes a file, so
+    "exists" must not mean "done" or a resume skips the repairs."""
+    p = tmp_path / "t.json"
+    p.write_text(json.dumps({"task_id": "a", "error": "429 ..."}), encoding="utf-8")
+    assert has_healthy_transcript(p) is False
+
+
+def test_has_healthy_transcript_false_for_empty_exchanges(tmp_path):
+    p = tmp_path / "t.json"
+    p.write_text(json.dumps({"task_id": "a", "exchanges": []}), encoding="utf-8")
+    assert has_healthy_transcript(p) is False
+
+
+def test_has_healthy_transcript_false_for_a_missing_file(tmp_path):
+    assert has_healthy_transcript(tmp_path / "nope.json") is False
+
+
+def test_has_healthy_transcript_false_for_corrupt_json(tmp_path):
+    p = tmp_path / "t.json"
+    p.write_text("{not json", encoding="utf-8")
+    assert has_healthy_transcript(p) is False

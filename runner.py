@@ -282,6 +282,21 @@ def run_one(task, provider_name, provider_cfg, model, api_key, run_index,
     }
 
 
+def has_healthy_transcript(path):
+    """True if `path` holds a usable transcript, not a failure record.
+
+    A run that died mid-way still writes a file -- valid JSON carrying an
+    `error` and no exchanges. Treating "file exists" as "already done" would
+    make a resumed run skip exactly the transcripts it was started to repair.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    return bool(data.get("exchanges"))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--task", required=True, help="path to a task yaml file")
@@ -296,6 +311,10 @@ def main():
                           "not the model, decides where answers end")
     ap.add_argument("--tpm", type=int, default=DEFAULT_TPM,
                      help="account-wide tokens-per-minute cap to pace against")
+    ap.add_argument("--skip-existing", action="store_true",
+                     help="skip pairs that already have a healthy transcript, "
+                          "so a run aborted by a quota can be resumed without "
+                          "re-spending tokens on work already done")
     ap.add_argument("--only-tasks",
                      help="comma-separated task ids to run, instead of every "
                           "task in the file. Re-running one failed transcript "
@@ -355,10 +374,17 @@ def main():
     total = len(tasks) * len(jobs) * args.n_runs
     done = 0
     truncated_total = 0
+    skipped = 0
     for task in tasks:
         for pname, cfg, model, api_key in jobs:
             for run_index in range(args.n_runs):
                 done += 1
+                fname = f"{task['id']}__{pname}_{safe_slug(model)}__run{run_index}.json"
+                if args.skip_existing and has_healthy_transcript(out_dir / fname):
+                    print(f"[{done}/{total}] {task['id']} x {pname}/{model} "
+                          f"run {run_index} -- already present, skipping")
+                    skipped += 1
+                    continue
                 print(f"[{done}/{total}] {task['id']} x {pname}/{model} run {run_index}")
                 try:
                     result = run_one(task, pname, cfg, model, api_key, run_index,
@@ -380,11 +406,11 @@ def main():
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "error": str(e),
                     }
-                fname = f"{task['id']}__{pname}_{safe_slug(model)}__run{run_index}.json"
                 with open(out_dir / fname, "w", encoding="utf-8") as f:
                     json.dump(result, f, ensure_ascii=False, indent=2)
 
-    print(f"\nWrote {done} transcripts to {out_dir}")
+    print(f"\nWrote {done - skipped} transcripts to {out_dir}"
+          + (f" ({skipped} already present, skipped)" if skipped else ""))
     if truncated_total:
         print(f"WARNING: {truncated_total} replies were truncated at the "
               f"{args.max_tokens}-token cap. A comparison over truncated "
