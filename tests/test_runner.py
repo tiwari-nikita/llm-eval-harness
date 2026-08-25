@@ -1,11 +1,16 @@
+import pytest
 from unittest.mock import patch, MagicMock
 
-from runner import TokenBudget, call_model, estimate_tokens, run_one, safe_slug
+from runner import (TokenBudget, call_model, estimate_tokens, parse_duration,
+                    run_one, safe_slug)
 
 
-def _resp(status_code, content=None, finish_reason="stop", total_tokens=None):
+def _resp(status_code, content=None, finish_reason="stop", total_tokens=None,
+          headers=None):
     r = MagicMock()
     r.status_code = status_code
+    r.headers = headers or {}
+    r.text = "body"
     if status_code < 400:
         r.json.return_value = {
             "choices": [{"message": {"content": content}, "finish_reason": finish_reason}],
@@ -216,3 +221,89 @@ def test_run_one_without_system_sends_no_system_message(mock_call_model, _sleep)
     sent = mock_call_model.call_args_list[-1].args[3]
     assert all(m["role"] != "system" for m in sent)
     assert result["system"] is None
+
+
+def test_parse_duration_reads_groq_compact_durations():
+    assert parse_duration("577ms") == 0.577
+    assert parse_duration("7.66s") == 7.66
+    assert parse_duration("1m26.4s") == 86.4
+
+
+def test_parse_duration_reads_bare_seconds_from_retry_after():
+    assert parse_duration("30") == 30.0
+
+
+def test_parse_duration_returns_none_when_absent_or_unparseable():
+    assert parse_duration(None) is None
+    assert parse_duration("") is None
+    assert parse_duration("soon") is None
+
+
+@patch("runner.time.sleep", return_value=None)
+@patch("runner.requests.post")
+def test_429_waits_for_the_reset_the_server_reports(mock_post, mock_sleep):
+    """The bug this guards: exponential backoff alone topped out at 30s total
+    across 4 attempts, shorter than the 60s TPM window it was waiting on, so a
+    run that overshot the cap could never recover."""
+    mock_post.side_effect = [
+        _resp(429, headers={"x-ratelimit-reset-tokens": "58.5s"}),
+        _resp(200, "recovered"),
+    ]
+    out = call_model("http://fake", "key", "model", [{"role": "user", "content": "hi"}])
+    assert out["content"] == "recovered"
+    # 58.5s reported + 1s margin, not the 2s first exponential step
+    assert mock_sleep.call_args_list[0].args[0] == pytest.approx(59.5)
+
+
+@patch("runner.time.sleep", return_value=None)
+@patch("runner.requests.post")
+def test_429_prefers_retry_after_over_the_reset_header(mock_post, mock_sleep):
+    mock_post.side_effect = [
+        _resp(429, headers={"retry-after": "12",
+                            "x-ratelimit-reset-tokens": "58.5s"}),
+        _resp(200, "ok"),
+    ]
+    call_model("http://fake", "key", "model", [{"role": "user", "content": "hi"}])
+    assert mock_sleep.call_args_list[0].args[0] == pytest.approx(13.0)
+
+
+@patch("runner.time.sleep", return_value=None)
+@patch("runner.requests.post")
+def test_429_without_headers_still_backs_off_exponentially(mock_post, mock_sleep):
+    mock_post.side_effect = [_resp(429), _resp(429), _resp(200, "ok")]
+    call_model("http://fake", "key", "model", [{"role": "user", "content": "hi"}])
+    assert [c.args[0] for c in mock_sleep.call_args_list] == [2, 4]
+
+
+@patch("runner.time.sleep", return_value=None)
+@patch("runner.requests.post")
+def test_server_wait_is_capped_so_a_bad_header_cannot_stall_a_run(mock_post, mock_sleep):
+    mock_post.side_effect = [_resp(429, headers={"retry-after": "9999"}),
+                             _resp(200, "ok")]
+    call_model("http://fake", "key", "model", [{"role": "user", "content": "hi"}],
+               max_backoff=120)
+    assert mock_sleep.call_args_list[0].args[0] == 120
+
+
+@patch("runner.time.sleep", return_value=None)
+@patch("runner.requests.post")
+def test_exhausted_retries_raise_with_model_and_status(mock_post, _sleep):
+    mock_post.return_value = _resp(429)
+    with pytest.raises(RuntimeError) as excinfo:
+        call_model("http://fake", "key", "model-x",
+                   [{"role": "user", "content": "hi"}], max_retries=3)
+    assert "429" in str(excinfo.value)
+    assert "model-x" in str(excinfo.value)
+    assert mock_post.call_count == 3
+
+
+@patch("runner.time.sleep", return_value=None)
+@patch("runner.requests.post")
+def test_5xx_ignores_rate_limit_headers_and_uses_backoff(mock_post, mock_sleep):
+    """A 503 is not a quota problem; a stale reset header must not extend it."""
+    mock_post.side_effect = [
+        _resp(503, headers={"x-ratelimit-reset-tokens": "58.5s"}),
+        _resp(200, "ok"),
+    ]
+    call_model("http://fake", "key", "model", [{"role": "user", "content": "hi"}])
+    assert mock_sleep.call_args_list[0].args[0] == 2

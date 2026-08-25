@@ -108,14 +108,43 @@ class TokenBudget:
             self.events[-1] = (ts, actual)
 
 
+_DURATION_UNITS = {"ms": 0.001, "s": 1.0, "m": 60.0, "h": 3600.0}
+_DURATION_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(ms|m|s|h)")
+
+
+def parse_duration(text):
+    """Seconds from a Retry-After or Groq x-ratelimit-reset-* value.
+
+    Retry-After is a bare number of seconds; Groq's reset headers use a
+    compact duration instead ("577ms", "7.66s", "1m26.4s"). Returns None if
+    the header is absent or unparseable, so callers can fall back to their
+    own backoff rather than treating a missing header as "retry immediately".
+    """
+    if not text:
+        return None
+    text = text.strip()
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    total = 0.0
+    matched = False
+    # "ms" is listed before "m" in the pattern so it wins the alternation and
+    # milliseconds are never read as minutes
+    for value, unit in _DURATION_RE.findall(text):
+        matched = True
+        total += float(value) * _DURATION_UNITS[unit]
+    return total if matched else None
+
+
 def estimate_tokens(messages, max_tokens):
     """Rough pre-flight cost of a call: ~4 chars per token, plus the output cap."""
     chars = sum(len(m.get("content") or "") for m in messages)
     return chars // 4 + max_tokens
 
 
-def call_model(base_url, api_key, model, messages, timeout=120, max_retries=4,
-               max_tokens=DEFAULT_MAX_TOKENS, budget=None):
+def call_model(base_url, api_key, model, messages, timeout=120, max_retries=6,
+               max_tokens=DEFAULT_MAX_TOKENS, budget=None, max_backoff=120):
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {"Authorization": "Bearer " + api_key, "Content-Type": "application/json"}
     # max_tokens caps reply length. It has to be generous enough that the
@@ -139,9 +168,24 @@ def call_model(base_url, api_key, model, messages, timeout=120, max_retries=4,
     for attempt in range(max_retries):
         resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
         if resp.status_code == 429 or resp.status_code >= 500:
-            wait = min(2 ** attempt * 2, 30)
-            print("    [{}] retrying in {}s...".format(resp.status_code, wait),
-                  file=sys.stderr)
+            # A tokens-per-minute limit clears on the provider's clock, not
+            # ours. The old exponential-only backoff topped out at 2+4+8+16 =
+            # 30s across 4 attempts, which is shorter than the 60s window it
+            # was waiting on, so an overshoot could never recover and the run
+            # died with a 429 -- five transcripts were lost that way on
+            # 2026-08-25. Groq reports the exact reset in a header; use it.
+            backoff = min(2 ** attempt * 2, 30)
+            server_wait = None
+            if resp.status_code == 429:
+                server_wait = parse_duration(resp.headers.get("retry-after"))
+                if server_wait is None:
+                    server_wait = parse_duration(
+                        resp.headers.get("x-ratelimit-reset-tokens"))
+            wait = min(max(backoff, (server_wait or 0.0) + 1.0), max_backoff)
+            source = "server" if server_wait is not None else "backoff"
+            print("    [{}] {} says wait {:.0f}s (attempt {}/{})".format(
+                resp.status_code, source, wait, attempt + 1, max_retries),
+                file=sys.stderr)
             time.sleep(wait)
             continue
         resp.raise_for_status()
@@ -159,7 +203,9 @@ def call_model(base_url, api_key, model, messages, timeout=120, max_retries=4,
             "total_tokens": usage.get("total_tokens"),
         }
 
-    resp.raise_for_status()
+    raise RuntimeError(
+        "{} from {} after {} attempts; last body: {}".format(
+            resp.status_code, model, max_retries, resp.text[:200]))
 
 
 def run_one(task, provider_name, provider_cfg, model, api_key, run_index,
@@ -218,6 +264,13 @@ def main():
                           "not the model, decides where answers end")
     ap.add_argument("--tpm", type=int, default=DEFAULT_TPM,
                      help="account-wide tokens-per-minute cap to pace against")
+    ap.add_argument("--only-tasks",
+                     help="comma-separated task ids to run, instead of every "
+                          "task in the file. Re-running one failed transcript "
+                          "should not cost the quota of a whole category.")
+    ap.add_argument("--only-models",
+                     help="comma-separated model ids to run, instead of every "
+                          "model configured for the provider")
     args = ap.parse_args()
 
     all_providers = load_providers(args.providers_file)
@@ -225,6 +278,13 @@ def main():
     system = load_system_prompt(args.task)
     if not tasks:
         sys.exit(f"No tasks found in {args.task}")
+
+    if args.only_tasks:
+        wanted = {t.strip() for t in args.only_tasks.split(",") if t.strip()}
+        tasks = [t for t in tasks if t["id"] in wanted]
+        unknown = wanted - {t["id"] for t in tasks}
+        if unknown:
+            sys.exit(f"Unknown task id(s) for {args.task}: {', '.join(sorted(unknown))}")
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -244,7 +304,11 @@ def main():
         if not api_key:
             missing_keys.append(cfg["api_key_env"])
             continue
-        for model in cfg["models"]:
+        models = cfg["models"]
+        if args.only_models:
+            wanted = {m.strip() for m in args.only_models.split(",") if m.strip()}
+            models = [m for m in models if m in wanted]
+        for model in models:
             jobs.append((pname, cfg, model, api_key))
 
     if missing_keys:
@@ -252,7 +316,8 @@ def main():
               + ", ".join(sorted(set(missing_keys))), file=sys.stderr)
     if not jobs:
         sys.exit("No runnable (provider, model) pairs. Set at least one "
-                  "provider's API key env var and try again.")
+                  "provider's API key env var and try again, and check "
+                  "--only-models against providers.yaml if you passed it.")
 
     budget = TokenBudget(args.tpm)
     total = len(tasks) * len(jobs) * args.n_runs
