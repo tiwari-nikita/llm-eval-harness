@@ -66,6 +66,16 @@ def safe_slug(text):
     return re.sub(r"[^a-zA-Z0-9_.-]+", "_", text)
 
 
+class DailyQuotaExceeded(RuntimeError):
+    """A per-day token limit was hit.
+
+    Distinct from a per-minute 429 because it is not retryable on any
+    timescale the run cares about: the window is a day, so backing off and
+    retrying just burns wall-clock and then fails anyway. The runner aborts
+    the whole run on this rather than failing each remaining task in turn.
+    """
+
+
 class TokenBudget:
     """Sliding-window limiter for an account-level tokens-per-minute cap.
 
@@ -143,6 +153,20 @@ def estimate_tokens(messages, max_tokens):
     return chars // 4 + max_tokens
 
 
+def is_daily_quota_error(resp):
+    """True when a 429 is a per-day cap rather than a per-minute one.
+
+    Groq spells it out in the error body ("on tokens per day (TPD): Limit
+    200000, Used 196936"); the response headers only carry the per-minute
+    figures, so the body is the only place the distinction shows up.
+    """
+    try:
+        body = (resp.text or "").lower()
+    except Exception:
+        return False
+    return "per day" in body or "tpd" in body or "per-day" in body
+
+
 def call_model(base_url, api_key, model, messages, timeout=120, max_retries=6,
                max_tokens=DEFAULT_MAX_TOKENS, budget=None, max_backoff=120):
     url = base_url.rstrip("/") + "/chat/completions"
@@ -167,6 +191,14 @@ def call_model(base_url, api_key, model, messages, timeout=120, max_retries=6,
 
     for attempt in range(max_retries):
         resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        if resp.status_code == 429 and is_daily_quota_error(resp):
+            # Retrying this is pointless -- the window is a day, not a minute.
+            # Before this check the runner spent 6 attempts and ~12 minutes per
+            # task discovering that, then repeated it for every task left in
+            # the run.
+            raise DailyQuotaExceeded(
+                "{} daily token quota exhausted: {}".format(model, resp.text[:300]))
+
         if resp.status_code == 429 or resp.status_code >= 500:
             # A tokens-per-minute limit clears on the provider's clock, not
             # ours. The old exponential-only backoff topped out at 2+4+8+16 =
@@ -333,6 +365,13 @@ def main():
                                      max_tokens=args.max_tokens, budget=budget,
                                      system=system)
                     truncated_total += result["n_truncated"]
+                except DailyQuotaExceeded as e:
+                    print(f"\n  ABORTING: {e}", file=sys.stderr)
+                    print(f"  {total - done} task/model pairs not attempted. "
+                          f"The per-day quota resets on the provider's clock; "
+                          f"re-run then, and only the missing transcripts.",
+                          file=sys.stderr)
+                    raise SystemExit(2)
                 except Exception as e:
                     print(f"    FAILED: {e}", file=sys.stderr)
                     result = {

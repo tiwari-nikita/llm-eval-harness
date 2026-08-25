@@ -1,8 +1,8 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, PropertyMock
 
-from runner import (TokenBudget, call_model, estimate_tokens, parse_duration,
-                    run_one, safe_slug)
+from runner import (DailyQuotaExceeded, TokenBudget, call_model, estimate_tokens,
+                    is_daily_quota_error, parse_duration, run_one, safe_slug)
 
 
 def _resp(status_code, content=None, finish_reason="stop", total_tokens=None,
@@ -307,3 +307,77 @@ def test_5xx_ignores_rate_limit_headers_and_uses_backoff(mock_post, mock_sleep):
     ]
     call_model("http://fake", "key", "model", [{"role": "user", "content": "hi"}])
     assert mock_sleep.call_args_list[0].args[0] == 2
+
+# --- a per-day quota is not a retryable 429 ---------------------------------
+
+GROQ_TPD_BODY = (
+    '{"error":{"message":"Rate limit reached for model `openai/gpt-oss-120b` in '
+    'organization `org_x` service tier `on_demand` on tokens per day (TPD): '
+    'Limit 200000, Used 196936, Requested 4200.","code":"rate_limit_exceeded"}}'
+)
+
+GROQ_TPM_BODY = (
+    '{"error":{"message":"Rate limit reached for model `openai/gpt-oss-120b` in '
+    'organization `org_x` service tier `on_demand` on tokens per minute (TPM): '
+    'Limit 8000, Used 7900, Requested 400.","code":"rate_limit_exceeded"}}'
+)
+
+
+def _resp_429(body, headers=None):
+    r = MagicMock()
+    r.status_code = 429
+    r.text = body
+    r.headers = headers or {}
+    return r
+
+
+def test_is_daily_quota_error_true_for_a_tpd_body():
+    assert is_daily_quota_error(_resp_429(GROQ_TPD_BODY)) is True
+
+
+def test_is_daily_quota_error_false_for_a_tpm_body():
+    """The two 429s look identical apart from this word, and the headers carry
+    only the per-minute figures, so the body is the sole signal."""
+    assert is_daily_quota_error(_resp_429(GROQ_TPM_BODY)) is False
+
+
+def test_is_daily_quota_error_survives_an_unreadable_body():
+    r = MagicMock()
+    type(r).text = PropertyMock(side_effect=Exception("no body"))
+    assert is_daily_quota_error(r) is False
+
+
+@patch("runner.time.sleep", return_value=None)
+@patch("runner.requests.post")
+def test_call_model_raises_immediately_on_a_daily_quota(mock_post, mock_sleep):
+    """The bug this guards: 6 attempts and ~12 minutes spent discovering that a
+    day-long window had not cleared, then repeated for every remaining task."""
+    mock_post.return_value = _resp_429(GROQ_TPD_BODY)
+    with pytest.raises(DailyQuotaExceeded):
+        call_model("http://fake", "key", "openai/gpt-oss-120b",
+                   [{"role": "user", "content": "hi"}])
+    assert mock_post.call_count == 1
+    assert mock_sleep.call_count == 0
+
+
+@patch("runner.time.sleep", return_value=None)
+@patch("runner.requests.post")
+def test_daily_quota_error_names_the_model(mock_post, _sleep):
+    mock_post.return_value = _resp_429(GROQ_TPD_BODY)
+    with pytest.raises(DailyQuotaExceeded) as exc:
+        call_model("http://fake", "key", "openai/gpt-oss-120b",
+                   [{"role": "user", "content": "hi"}])
+    assert "openai/gpt-oss-120b" in str(exc.value)
+
+
+@patch("runner.time.sleep", return_value=None)
+@patch("runner.requests.post")
+def test_call_model_still_retries_a_per_minute_429(mock_post, mock_sleep):
+    """Fail-fast must not swallow the minute-scale case, which does recover."""
+    mock_post.side_effect = [_resp_429(GROQ_TPM_BODY), _resp(200, "recovered")]
+    out = call_model("http://fake", "key", "openai/gpt-oss-120b",
+                     [{"role": "user", "content": "hi"}])
+    assert out["content"] == "recovered"
+    assert mock_post.call_count == 2
+    assert mock_sleep.call_count == 1
+
