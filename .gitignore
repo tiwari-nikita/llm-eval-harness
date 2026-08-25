@@ -26,3 +26,6 @@ __pycache__/
 
 # rendered blind vote pairs (contain personal task text; local only)
 .vote_view/
+
+# live catalogue snapshot (regenerate, do not trust a committed copy)
+catalogue.json
