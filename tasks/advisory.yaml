@@ -7,6 +7,27 @@
 # Scored by blind pairwise only. No checklist. Model names hidden until the
 # vote is recorded, side randomised.
 
+system: >-
+  Keep every reply under 350 words. Favour direct prose over tables and
+  bulleted outlines.
+
+# Why this is here, and what it costs:
+#
+# Groq's free tier meters 8000 tokens per minute account-wide, and a
+# 5-turn script resends its whole history each turn, so the final call
+# costs roughly 5x one reply. That puts a hard ceiling near 1500 tokens
+# per reply -- a single request over the per-minute cap is rejected, not
+# throttled. Left unconstrained these models write 1200+ token markdown
+# tables and get cut off mid-sentence, which turns the pairwise vote into
+# a test of front-loading rather than of advice.
+#
+# So this is a real change to what the eval measures: it compares the
+# best *concise* advice each model gives, not the best advice at any
+# length. Every model gets this identical string, sent as a system
+# message before turn 1, so the comparison between them stays fair.
+# Remove it if you ever run these tasks against a provider without a
+# tight TPM cap -- and re-run rather than mixing the two in one vote.
+
 tasks:
   - id: advisory_001
     title: Scoping a research project under a real constraint

@@ -169,3 +169,50 @@ def test_token_budget_settle_ignores_missing_usage(_sleep):
     b.reserve(5000)
     b.settle(None)
     assert b.events[-1][1] == 5000
+
+
+def test_load_system_prompt_reads_task_file_key(tmp_path):
+    p = tmp_path / "t.yaml"
+    p.write_text("system: be brief\ntasks:\n  - id: a\n    prompt: hi\n", encoding="utf-8")
+    from runner import load_system_prompt
+    assert load_system_prompt(str(p)) == "be brief"
+
+
+def test_load_system_prompt_absent_is_none(tmp_path):
+    p = tmp_path / "t.yaml"
+    p.write_text("tasks:\n  - id: a\n    prompt: hi\n", encoding="utf-8")
+    from runner import load_system_prompt
+    assert load_system_prompt(str(p)) is None
+
+
+@patch("runner.time.sleep", return_value=None)
+@patch("runner.call_model")
+def test_run_one_prepends_system_message_once(mock_call_model, _sleep):
+    """The system prompt must lead the history and not repeat per turn."""
+    mock_call_model.return_value = {
+        "content": "r", "finish_reason": "stop",
+        "completion_tokens": 5, "total_tokens": 10,
+    }
+    task = {"id": "advisory_001", "turns": ["a", "b", "c"]}
+    result = run_one(task, "groq", {"base_url": "http://x"}, "m", "k", 0,
+                     system="be brief")
+
+    last_messages = mock_call_model.call_args_list[-1].args[3]
+    assert last_messages[0] == {"role": "system", "content": "be brief"}
+    assert sum(1 for m in last_messages if m["role"] == "system") == 1
+    assert result["system"] == "be brief"
+
+
+@patch("runner.time.sleep", return_value=None)
+@patch("runner.call_model")
+def test_run_one_without_system_sends_no_system_message(mock_call_model, _sleep):
+    mock_call_model.return_value = {
+        "content": "r", "finish_reason": "stop",
+        "completion_tokens": 5, "total_tokens": 10,
+    }
+    task = {"id": "research_001", "prompt": "q"}
+    result = run_one(task, "groq", {"base_url": "http://x"}, "m", "k", 0)
+
+    sent = mock_call_model.call_args_list[-1].args[3]
+    assert all(m["role"] != "system" for m in sent)
+    assert result["system"] is None

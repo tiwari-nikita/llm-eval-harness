@@ -48,6 +48,20 @@ def load_tasks(path):
     return data or []
 
 
+def load_system_prompt(path):
+    """Optional `system:` key at the top of a task file.
+
+    It lives in the task file rather than in code or on the command line so
+    that it is versioned alongside the turns it applies to, and so it is
+    impossible to send one model a different instruction than another.
+    """
+    with open(path, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    if isinstance(data, dict):
+        return data.get("system")
+    return None
+
+
 def safe_slug(text):
     return re.sub(r"[^a-zA-Z0-9_.-]+", "_", text)
 
@@ -149,11 +163,13 @@ def call_model(base_url, api_key, model, messages, timeout=120, max_retries=4,
 
 
 def run_one(task, provider_name, provider_cfg, model, api_key, run_index,
-            max_tokens=DEFAULT_MAX_TOKENS, budget=None):
+            max_tokens=DEFAULT_MAX_TOKENS, budget=None, system=None):
     is_multiturn = "turns" in task
     turns = task["turns"] if is_multiturn else [task["prompt"]]
 
     messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
     exchanges = []
     for turn_text in turns:
         messages.append({"role": "user", "content": turn_text})
@@ -182,6 +198,7 @@ def run_one(task, provider_name, provider_cfg, model, api_key, run_index,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "multiturn": is_multiturn,
         "max_tokens": max_tokens,
+        "system": system,
         "n_truncated": n_cut,
         "exchanges": exchanges,
     }
@@ -205,11 +222,15 @@ def main():
 
     all_providers = load_providers(args.providers_file)
     tasks = load_tasks(args.task)
+    system = load_system_prompt(args.task)
     if not tasks:
         sys.exit(f"No tasks found in {args.task}")
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    if system:
+        print(f"System prompt (identical for every model):\n  {system}\n")
 
     requested = [p.strip() for p in args.providers.split(",") if p.strip()]
     missing_keys = []
@@ -244,7 +265,8 @@ def main():
                 print(f"[{done}/{total}] {task['id']} x {pname}/{model} run {run_index}")
                 try:
                     result = run_one(task, pname, cfg, model, api_key, run_index,
-                                     max_tokens=args.max_tokens, budget=budget)
+                                     max_tokens=args.max_tokens, budget=budget,
+                                     system=system)
                     truncated_total += result["n_truncated"]
                 except Exception as e:
                     print(f"    FAILED: {e}", file=sys.stderr)
