@@ -122,13 +122,20 @@ def cmd_grade(args):
 
         grading_prompt = build_grading_prompt(task, answer)
         # Grading prompts are longer than a normal conversational turn (full
-        # answer + criteria + instructions), so gpt-oss models can burn the
-        # default 250-token budget entirely on hidden reasoning and return
-        # empty content even with reasoning_effort=low. Give the grader more
-        # room; the verdict itself is a short JSON object either way.
-        raw = call_model(cfg["base_url"], api_key, args.grader_model,
-                          [{"role": "user", "content": grading_prompt}],
-                          max_tokens=600)
+        # answer + criteria + instructions), so gpt-oss models can burn a small
+        # token budget entirely on hidden reasoning and return empty content
+        # even with reasoning_effort=low. Give the grader room; the verdict
+        # itself is a short JSON object either way.
+        reply = call_model(cfg["base_url"], api_key, args.grader_model,
+                           [{"role": "user", "content": grading_prompt}],
+                           max_tokens=600)
+        raw = reply["content"]
+        if reply.get("finish_reason") == "length":
+            # A verdict cut off mid-JSON parses as a failure or, worse, as a
+            # partial criteria dict that scores lower than the answer deserves.
+            print(f"SKIP {f.name}: grader verdict hit the token cap and is "
+                  f"incomplete", file=sys.stderr)
+            continue
         try:
             verdict = extract_json(raw)
         except (ValueError, json.JSONDecodeError) as e:
