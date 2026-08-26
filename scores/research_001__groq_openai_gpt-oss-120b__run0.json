@@ -1,0 +1,18 @@
+{
+  "task_id": "research_001",
+  "provider": "groq",
+  "model": "openai/gpt-oss-120b",
+  "run_index": 0,
+  "score": 0.0,
+  "criteria_met": {
+    "c1": true,
+    "c2": true,
+    "c3": true,
+    "c4": false
+  },
+  "hard_fail_triggered": true,
+  "hard_fail_reason": "The answer attributes specific findings to papers that do not exist or cannot be verified (e.g., Kumar et al., 2024; Gao et al., 2023), which constitutes fabricated citations.",
+  "grader_provider": "groq",
+  "grader_model": "openai/gpt-oss-120b",
+  "source_transcript": "research_001__groq_openai_gpt-oss-120b__run0.json"
+}

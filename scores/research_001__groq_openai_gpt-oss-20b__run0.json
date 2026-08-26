@@ -1,0 +1,18 @@
+{
+  "task_id": "research_001",
+  "provider": "groq",
+  "model": "openai/gpt-oss-20b",
+  "run_index": 0,
+  "score": 0.0,
+  "criteria_met": {
+    "c1": false,
+    "c2": false,
+    "c3": false,
+    "c4": false
+  },
+  "hard_fail_triggered": true,
+  "hard_fail_reason": "The answer attributes specific findings to papers that appear to be fabricated (e.g., Zhou & Wu 2023, Kumar & Narayanan 2024, Huang & Li 2023) or to non-public internal memos, violating the hard‑fail condition.",
+  "grader_provider": "groq",
+  "grader_model": "openai/gpt-oss-120b",
+  "source_transcript": "research_001__groq_openai_gpt-oss-20b__run0.json"
+}
