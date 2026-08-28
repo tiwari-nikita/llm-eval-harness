@@ -18,6 +18,10 @@ runner.py         sends task turns to models, saves transcripts
 score_objective.py  model-graded + hand-sample grading for research/documents
 vote_pairwise.py     blind pairwise voting CLI for advisory/personal
 chat_vote.py         same protocol, driven from a chat session instead
+make_grading_bundle.py  builds a standalone HTML page for other people to vote in
+grade_template.html     that page's source; generator inlines the transcripts
+ingest_votes.py         turns a returned votes file into preference records
+verify_citations.py     checks citations against OpenAlex/Crossref, not a model
 router.py            ranks models per category from /scores + /preference
 catalogue.py         live catalogue of free model access across providers
 FREE_MODELS.md       generated export of the above; regenerate, don't trust
@@ -63,6 +67,17 @@ python vote_pairwise.py --transcripts runs/advisory_001__groq_A.json runs/adviso
 # thing stopping the votes from happening
 python chat_vote.py show   --task-id advisory_001 --task-file tasks/advisory.yaml
 python chat_vote.py record --task-id advisory_001 --votes a,b,tie,a,a
+
+# ...or hand the vote to someone who does not have this repo. Builds one
+# self-contained .html that opens from file://, offline, no install; they
+# send back a small JSON.
+python make_grading_bundle.py --category advisory
+python ingest_votes.py votes_advisory_*.json --dry-run
+python ingest_votes.py votes_advisory_*.json
+
+# check whether a citation actually exists, rather than asking a model
+python verify_citations.py transcript runs/research_001__groq_openai_gpt-oss-120b__run0.json
+python verify_citations.py title "Scaling Laws for Reward Model Overoptimization"
 
 # what is free right now, fetched rather than remembered
 python catalogue.py refresh

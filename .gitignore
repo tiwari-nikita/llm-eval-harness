@@ -32,3 +32,9 @@ catalogue.json
 
 # bibliographic lookup cache (regenerable, and large)
 .citation_cache.json
+
+# generated grading pages embed full transcripts, which are themselves
+# gitignored, and each is tied to a bundle mapping in .vote_state/
+grade_*.html
+!grade_template.html
+votes_*.json
