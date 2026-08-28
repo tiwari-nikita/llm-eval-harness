@@ -29,3 +29,6 @@ __pycache__/
 
 # live catalogue snapshot (regenerate, do not trust a committed copy)
 catalogue.json
+
+# bibliographic lookup cache (regenerable, and large)
+.citation_cache.json
