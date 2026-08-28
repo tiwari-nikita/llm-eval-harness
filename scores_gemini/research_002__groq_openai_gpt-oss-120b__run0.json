@@ -1,0 +1,17 @@
+{
+  "task_id": "research_002",
+  "provider": "groq",
+  "model": "openai/gpt-oss-120b",
+  "run_index": 0,
+  "score": 0.6666666666666666,
+  "criteria_met": {
+    "c1": true,
+    "c2": false,
+    "c3": true
+  },
+  "hard_fail_triggered": false,
+  "hard_fail_reason": null,
+  "grader_provider": "google",
+  "grader_model": "gemini-3.6-flash",
+  "source_transcript": "research_002__groq_openai_gpt-oss-120b__run0.json"
+}

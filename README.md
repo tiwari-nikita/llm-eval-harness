@@ -174,21 +174,45 @@ Four things about these numbers matter more than the numbers:
   models changed; the instrument did. Treat any result here as provisional
   until you know what the harness was doing to the inputs.
 - **Both models hard-failed `research_001` for fabricated citations**, which
-  is what zeroes that row. That is the single most interesting result so far
-  and the least trustworthy: the grader is asserting that specific papers do
-  not exist, and "does this paper exist" is exactly the judgment a language
-  model is worst at. It could equally be a false positive. Hand-check this
-  one first — it is the highest-leverage item in the whole score set.
-- **The model grader is not fully deterministic.** Re-running it on an
+  is what zeroes that row. This one is corroborated. Two graders from
+  unrelated families (`gpt-oss-120b` and `gemini-3.6-flash`) independently
+  reached the same verdict and independently named overlapping invented
+  sources. Spot-checking by hand confirms it: the answer cites *"Language
+  models can (still) be fooled: the limits of RLHF"* to Gao et al. 2023, but
+  Gao et al. 2023 is *Scaling Laws for Reward Model Overoptimization* — real
+  authors, real year, invented title and invented finding. Same pattern for
+  *"Reward modeling for large language models"* attributed to Bai et al.
+  2022. Checking only the author-year passes these; the fabrication is in the
+  title.
+- **The two graders disagree on 50% of transcripts, which by this project's
+  own threshold makes the automated criteria scores unusable.** Grading
+  `research` with `gemini-3.6-flash` instead of `gpt-oss-120b`:
+
+  | task / model              | gpt-oss grader | gemini grader |
+  |---------------------------|---------------:|--------------:|
+  | research_001 / gpt-oss-120b | 0.00 | 0.00 |
+  | research_001 / gpt-oss-20b  | 0.00 | 0.00 |
+  | research_002 / gpt-oss-120b | 1.00 | 0.67 |
+  | research_002 / gpt-oss-20b  | 1.00 | **0.00** |
+
+  On the last row one grader marked all three criteria met and the other
+  marked none. eval-spec.md calls >20% disagreement unusable; this is 50%.
+  The split is informative rather than uniform: the graders agree perfectly
+  on `hard_fail`, an egregious binary judgment, and fall apart on
+  fine-grained criteria. So treat hard fails as signal and criteria
+  percentages as noise until a hand-check adjudicates them. Second-grader
+  output lives in `/scores_gemini` alongside `/scores` rather than replacing
+  it, since the disagreement *is* the finding.
+- **The model grader is not deterministic either.** Re-running it on an
   unchanged transcript once flipped a criterion and moved the score from 1.00
-  to 0.75 with no other input changed. This is why eval-spec.md requires
-  hand-checking a random 15% and reporting the disagreement rate rather than
-  trusting one automated pass. That hand-check still hasn't been run.
-- **The grader is the same model family as both models it grades**, since
-  Groq is the only provider with a key. Take all of this as pipeline
-  validation, not a ranking, until a second provider's key exists. Google AI
-  Studio is the useful one to add: independent family, so the grader stops
-  being related to the graded, and a separate daily budget.
+  to 0.75 with no other input changed. Between that and the cross-grader
+  disagreement above, a single automated pass is not evidence of anything on
+  its own.
+- **The `documents` numbers still have the same-family problem.** They were
+  graded only by `gpt-oss-120b`, which shares a family with both models it is
+  grading. Google AI Studio is now configured, so re-grading `documents` with
+  `gemini-3.6-flash` and reporting that disagreement rate too is the obvious
+  next step — expect it to be as bad as `research`.
 
 ## Grading
 

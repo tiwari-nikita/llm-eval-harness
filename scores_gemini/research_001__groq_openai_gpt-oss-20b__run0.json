@@ -1,0 +1,18 @@
+{
+  "task_id": "research_001",
+  "provider": "groq",
+  "model": "openai/gpt-oss-20b",
+  "run_index": 0,
+  "score": 0.0,
+  "criteria_met": {
+    "c1": false,
+    "c2": true,
+    "c3": true,
+    "c4": false
+  },
+  "hard_fail_triggered": true,
+  "hard_fail_reason": "The model hallucinates several non-existent papers (e.g., Zhou & Wu 2023, Kumar & Narayanan 2024, Huang & Li 2023), fabricates author names/years for real projects (e.g., Li et al. for Alpaca, Chung et al. for Vicuna), and falsely claims that non-RLHF models/papers (Pythia, Alpaca, Vicuna) were RLHF studies that documented reward hacking.",
+  "grader_provider": "google",
+  "grader_model": "gemini-3.6-flash",
+  "source_transcript": "research_001__groq_openai_gpt-oss-20b__run0.json"
+}

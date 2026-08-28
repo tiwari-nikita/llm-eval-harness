@@ -1,0 +1,18 @@
+{
+  "task_id": "research_001",
+  "provider": "groq",
+  "model": "openai/gpt-oss-120b",
+  "run_index": 0,
+  "score": 0.0,
+  "criteria_met": {
+    "c1": true,
+    "c2": true,
+    "c3": true,
+    "c4": false
+  },
+  "hard_fail_triggered": true,
+  "hard_fail_reason": "The response fabricates several non-existent papers and attributes specific quantitative findings to them (e.g., 'Language models can (still) be fooled: the limits of RLHF' by Gao et al., 2023; 'Red-team-in-the-loop' by Kumar et al., 2024; 'The peril of over-optimising language models' by Sheng et al., 2023; and 'Citation hallucination under RLHF' by Liu et al., 2024).",
+  "grader_provider": "google",
+  "grader_model": "gemini-3.6-flash",
+  "source_transcript": "research_001__groq_openai_gpt-oss-120b__run0.json"
+}

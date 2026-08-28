@@ -40,5 +40,20 @@ openrouter:
 google:
   base_url: https://generativelanguage.googleapis.com/v1beta/openai
   api_key_env: GOOGLE_API_KEY
+  # Verified live 2026-08-26 by POSTing each ID to the OpenAI-compatible
+  # endpoint above, not by reading a docs page. gemini-1.5-flash (the previous
+  # entry here) is gone, and so is gemini-2.5-flash -- that one 404s with "no
+  # longer available to new users", which a model-list fetch alone would not
+  # have caught, since the list still advertises it.
+  #
+  # Worth knowing before setting max_tokens: 3.6-flash and 3.5-flash spend a
+  # hidden reasoning budget before emitting text (121 and 100 tokens
+  # respectively to answer "reply with the single word: ok"), the same trait
+  # that made gpt-oss return empty content at a small cap. flash-lite does not
+  # -- it answered in 9.
+  #
+  # Google does not publish per-model pricing on the models endpoint, so
+  # catalogue.py reports these as free-status unknown rather than guessing.
   models:
-    - gemini-1.5-flash
+    - gemini-3.6-flash
+    - gemini-3.5-flash-lite

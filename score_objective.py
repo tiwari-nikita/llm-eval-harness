@@ -33,6 +33,9 @@ from runner import load_providers, load_tasks, call_model, safe_slug
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+# Sized for graders that reason before answering; see cmd_grade.
+DEFAULT_GRADER_MAX_TOKENS = 3000
+
 GRADER_INSTRUCTIONS = """You are grading one model's answer against a fixed \
 checklist. Each criterion is binary: met or not met. Do not be lenient \
 because the answer is fluent; do not penalize brevity if the criterion is \
@@ -122,13 +125,15 @@ def cmd_grade(args):
 
         grading_prompt = build_grading_prompt(task, answer)
         # Grading prompts are longer than a normal conversational turn (full
-        # answer + criteria + instructions), so gpt-oss models can burn a small
-        # token budget entirely on hidden reasoning and return empty content
-        # even with reasoning_effort=low. Give the grader room; the verdict
-        # itself is a short JSON object either way.
+        # answer + criteria + instructions), and several model families spend a
+        # hidden reasoning budget before emitting any visible text -- gpt-oss
+        # does it, and so does gemini-3.6-flash, which needed 121 tokens to
+        # answer "reply with the single word: ok". At 600 every Gemini verdict
+        # came back truncated. The verdict itself is a short JSON object, so
+        # the cap is really sizing the invisible part; default generously.
         reply = call_model(cfg["base_url"], api_key, args.grader_model,
                            [{"role": "user", "content": grading_prompt}],
-                           max_tokens=600)
+                           max_tokens=args.grader_max_tokens)
         raw = reply["content"]
         if reply.get("finish_reason") == "length":
             # A verdict cut off mid-JSON parses as a failure or, worse, as a
@@ -209,6 +214,10 @@ def main():
     g.add_argument("--providers-file", default="providers.yaml")
     g.add_argument("--grader-provider", required=True)
     g.add_argument("--grader-model", required=True)
+    g.add_argument("--grader-max-tokens", type=int, default=DEFAULT_GRADER_MAX_TOKENS,
+                    help="output cap for the grader call; mostly sizes the "
+                         "hidden reasoning budget, since the verdict is a "
+                         "short JSON object")
     g.set_defaults(func=cmd_grade)
 
     h = sub.add_parser("hand-sample")
