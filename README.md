@@ -156,15 +156,22 @@ unauthenticated, see `wildchat_500_summary.txt`):
 The only provider with a live key so far is Groq (`openai/gpt-oss-120b` vs
 `openai/gpt-oss-20b`). 24 transcripts, all healthy, 3% of replies truncated.
 
-| category  | gpt-oss-120b | gpt-oss-20b | n per model |
-|-----------|-------------:|------------:|------------:|
-| research  | 0.50         | 0.50        | 2           |
-| documents | 0.88         | 0.94        | 4           |
+Every transcript is graded twice, by two unrelated grader families. There is
+no single headline table on purpose — the two graders disagree about who
+wins, so quoting one set of numbers without naming its grader would be
+reporting an artifact:
+
+| category  | model        | graded by gpt-oss-120b | graded by gemini-3.6-flash | n |
+|-----------|--------------|-----------------------:|---------------------------:|--:|
+| research  | gpt-oss-120b | 0.50                   | 0.33                       | 2 |
+| research  | gpt-oss-20b  | 0.50                   | 0.00                       | 2 |
+| documents | gpt-oss-120b | 0.88                   | 0.88                       | 4 |
+| documents | gpt-oss-20b  | 0.94                   | 0.81                       | 4 |
 
 Advisory and personal have 6 transcripts each, ready for blind pairwise
 voting; **none cast yet** — that step needs a human, not the harness.
 
-Four things about these numbers matter more than the numbers:
+What matters here is mostly not the numbers:
 
 - **The previous ranking was a measurement artifact.** The table here used to
   read research 0.58/0.38 and documents 0.88/0.62, apparently a clear win for
@@ -184,35 +191,60 @@ Four things about these numbers matter more than the numbers:
   *"Reward modeling for large language models"* attributed to Bai et al.
   2022. Checking only the author-year passes these; the fabrication is in the
   title.
-- **The two graders disagree on 50% of transcripts, which by this project's
-  own threshold makes the automated criteria scores unusable.** Grading
-  `research` with `gemini-3.6-flash` instead of `gpt-oss-120b`:
+- **Which model "wins" is decided by which grader you ask.** Every transcript
+  was graded twice, by `gpt-oss-120b` and by `gemini-3.6-flash`:
 
-  | task / model              | gpt-oss grader | gemini grader |
-  |---------------------------|---------------:|--------------:|
-  | research_001 / gpt-oss-120b | 0.00 | 0.00 |
-  | research_001 / gpt-oss-20b  | 0.00 | 0.00 |
-  | research_002 / gpt-oss-120b | 1.00 | 0.67 |
-  | research_002 / gpt-oss-20b  | 1.00 | **0.00** |
+  | category  | model        | gpt-oss grader | gemini grader |
+  |-----------|--------------|---------------:|--------------:|
+  | documents | gpt-oss-120b | 0.88           | 0.88          |
+  | documents | gpt-oss-20b  | **0.94**       | 0.81          |
+  | research  | gpt-oss-120b | 0.50           | **0.33**      |
+  | research  | gpt-oss-20b  | 0.50           | 0.00          |
 
-  On the last row one grader marked all three criteria met and the other
-  marked none. eval-spec.md calls >20% disagreement unusable; this is 50%.
-  The split is informative rather than uniform: the graders agree perfectly
-  on `hard_fail`, an egregious binary judgment, and fall apart on
-  fine-grained criteria. So treat hard fails as signal and criteria
-  percentages as noise until a hand-check adjudicates them. Second-grader
-  output lives in `/scores_gemini` alongside `/scores` rather than replacing
-  it, since the disagreement *is* the finding.
+  Under the gpt-oss grader, 20b wins `documents` and `research` is a tie.
+  Under the Gemini grader, 120b wins both. The ranking is not a property of
+  the models here; it is a property of the grader. That is the single most
+  important result this harness has produced, and it argues for reporting
+  every future number with its grader named.
+
+- **The disagreement rate alone is the wrong statistic.** Per-transcript:
+
+  | category  | disagreement |
+  |-----------|-------------:|
+  | documents | 1/8  (12%)   |
+  | research  | 2/4  (50%)   |
+  | overall   | 3/12 (25%)   |
+
+  `documents` sits *below* eval-spec.md's 20% unusable threshold and would
+  pass a naive check — yet its single disagreeing row is enough to reverse
+  the ranking, because the margin between the models (0.06) is smaller than
+  one flipped criterion. A low disagreement rate does not imply a stable
+  conclusion. What matters is disagreement *relative to the gap being
+  measured*, and with n=4 and n=2 per model that gap is far too small to
+  survive any grader noise at all.
+
+- **The two categories are not equally gradeable.** 12% disagreement on
+  `documents` versus 50% on `research` is a large, consistent split, and it
+  has an obvious explanation: documents criteria are largely structural
+  (is it organised, does it hit the required sections) while research
+  criteria require judging whether factual claims and citations hold up —
+  exactly the judgment a language model is least able to make. Model-graded
+  scoring looks viable for the structural category and not for the factual
+  one. The graders also agree perfectly on `hard_fail`, an egregious binary
+  call, and diverge on fine-grained criteria. Treat hard fails as signal.
+
+  Second-grader output lives in `/scores_gemini` alongside `/scores` rather
+  than replacing it, since the disagreement *is* the finding.
 - **The model grader is not deterministic either.** Re-running it on an
   unchanged transcript once flipped a criterion and moved the score from 1.00
   to 0.75 with no other input changed. Between that and the cross-grader
   disagreement above, a single automated pass is not evidence of anything on
   its own.
-- **The `documents` numbers still have the same-family problem.** They were
-  graded only by `gpt-oss-120b`, which shares a family with both models it is
-  grading. Google AI Studio is now configured, so re-grading `documents` with
-  `gemini-3.6-flash` and reporting that disagreement rate too is the obvious
-  next step — expect it to be as bad as `research`.
+- **n is far too small for any of this to be a ranking.** Four transcripts
+  per model for `documents`, two for `research`, one run each. The daily
+  token cap is what enforces that (see limitations), and it is why no
+  variance estimate exists. Every number above should be read as "this
+  pipeline runs and produces plausible output", not as a result.
 
 ## Grading
 
