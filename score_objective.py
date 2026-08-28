@@ -117,8 +117,19 @@ def cmd_grade(args):
     for f in transcript_files:
         with open(f, encoding="utf-8") as fh:
             transcript = json.load(fh)
-        if "error" in transcript:
+        if "error" in transcript or not transcript.get("exchanges"):
             print(f"skip {f.name}: run had an error, nothing to grade")
+            continue
+
+        out_name = (f"{transcript['task_id']}__{transcript['provider']}_"
+                    f"{safe_slug(transcript['model'])}__"
+                    f"run{transcript.get('run_index', 0)}.json")
+        if args.skip_existing and (scores_dir / out_name).exists():
+            # Re-grading is not free and not idempotent: the grader is
+            # non-deterministic, so an unnecessary pass can silently rewrite a
+            # recorded score with a different one and destroy a comparison
+            # that was the point of running it.
+            print(f"skip {f.name}: already graded")
             continue
         task = tasks[transcript["task_id"]]
         answer = transcript["exchanges"][0]["assistant"]
@@ -161,7 +172,6 @@ def cmd_grade(args):
             "grader_model": args.grader_model,
             "source_transcript": f.name,
         }
-        out_name = f"{task['id']}__{transcript['provider']}_{safe_slug(transcript['model'])}__run{transcript.get('run_index', 0)}.json"
         with open(scores_dir / out_name, "w", encoding="utf-8") as fh:
             json.dump(out, fh, ensure_ascii=False, indent=2)
         print(f"{f.name}: score {score:.2f}" + (f" (hard fail: {hard_fail_reason})" if hard_fail_reason else ""))
@@ -214,6 +224,10 @@ def main():
     g.add_argument("--providers-file", default="providers.yaml")
     g.add_argument("--grader-provider", required=True)
     g.add_argument("--grader-model", required=True)
+    g.add_argument("--skip-existing", action="store_true",
+                    help="leave already-graded transcripts alone; the grader is "
+                         "non-deterministic, so re-grading can overwrite a "
+                         "recorded score with a different one")
     g.add_argument("--grader-max-tokens", type=int, default=DEFAULT_GRADER_MAX_TOKENS,
                     help="output cap for the grader call; mostly sizes the "
                          "hidden reasoning budget, since the verdict is a "

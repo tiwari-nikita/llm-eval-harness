@@ -180,15 +180,23 @@ def parse_retry_hint(body):
 def is_daily_quota_error(resp):
     """True when a 429 is a per-day cap rather than a per-minute one.
 
-    Groq spells it out in the error body ("on tokens per day (TPD): Limit
-    200000, Used 196936"); the response headers only carry the per-minute
-    figures, so the body is the only place the distinction shows up.
+    The two providers phrase it completely differently and neither puts it in
+    a header, so the body is the only place the distinction shows up:
+
+      Groq    "on tokens per day (TPD): Limit 200000, Used 196936"
+      Google  "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+
+    Google's form has no space in "PerDay", which an earlier version of this
+    check missed -- so a 20-requests-per-day cap was retried six times on the
+    per-minute schedule. Google also quotes a retryDelay of ~40s on that
+    error, which is not the time a *daily* quota takes to clear; treating it
+    as a daily cap and giving up quickly is the point.
     """
     try:
         body = (resp.text or "").lower()
     except Exception:
         return False
-    return "per day" in body or "tpd" in body or "per-day" in body
+    return any(m in body for m in ("per day", "per-day", "perday", "tpd", "rpd"))
 
 
 def call_model(base_url, api_key, model, messages, timeout=120, max_retries=6,

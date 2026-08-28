@@ -510,3 +510,25 @@ def test_daily_quota_message_reports_how_long_the_day_is_gone(mock_post, _sleep)
         call_model("http://fake", "key", "m", [{"role": "user", "content": "hi"}],
                    max_quota_wait=600)
     assert "34m" in str(exc.value)
+
+
+GOOGLE_RPD_BODY = (
+    '[{"error":{"code":429,"message":"You exceeded your current quota. '
+    '* Quota exceeded for metric: generativelanguage.googleapis.com/'
+    'generate_content_free_tier_requests, limit: 20, model: gemini-3.6-flash. '
+    'Please retry in 40.8s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":'
+    '"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaId":'
+    '"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaValue":"20"}]},'
+    '{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"40s"}]}}]'
+)
+
+
+def test_google_per_day_quota_is_recognised_despite_having_no_space():
+    """Google writes PerDay with no space inside a quotaId. An earlier version
+    of this check looked for "per day" and missed it, so a 20-requests-per-day
+    cap was retried six times on the per-minute schedule."""
+    assert is_daily_quota_error(_resp_429(GOOGLE_RPD_BODY)) is True
+
+
+def test_a_plain_per_minute_body_is_still_not_a_daily_quota():
+    assert is_daily_quota_error(_resp_429(GROQ_TPM_BODY)) is False

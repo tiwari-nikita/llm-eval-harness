@@ -54,6 +54,15 @@ google:
   #
   # Google does not publish per-model pricing on the models endpoint, so
   # catalogue.py reports these as free-status unknown rather than guessing.
+  #
+  # The binding limit here is requests per day, per model, and it is small
+  # enough to dictate roles. gemini-3.6-flash reports
+  # GenerateRequestsPerDayPerProjectPerModel-FreeTier with quotaValue 20 --
+  # twenty requests a day. Grading one category costs twelve. So 3.6-flash is
+  # reserved as the *grader* and deliberately kept out of the list below; it
+  # cannot be a model under test and a grader on the same day. Discovered by
+  # exhausting it, since no header advertises the limit and a 200 response
+  # says nothing about what remains.
   models:
-    - gemini-3.6-flash
+    - gemini-3.5-flash
     - gemini-3.5-flash-lite

@@ -108,7 +108,8 @@ def _grade_setup(tmp_path, reply):
 
     args = MagicMock(task=str(task_file), runs_dir=str(runs),
                      scores_dir=str(scores), providers_file=str(providers),
-                     grader_provider="groq", grader_model="m")
+                     grader_provider="groq", grader_model="m",
+                     grader_max_tokens=3000, skip_existing=False)
     return args, scores
 
 
@@ -138,3 +139,28 @@ def test_cmd_grade_skips_a_verdict_truncated_by_the_token_cap(tmp_path, monkeypa
         cmd_grade(args)
     assert not list(Path(scores).glob("*.json"))
     assert "hit the token cap" in capsys.readouterr().err
+
+
+def test_cmd_grade_skip_existing_leaves_a_recorded_score_alone(tmp_path, monkeypatch):
+    """The grader is non-deterministic, so an unnecessary re-grade can rewrite
+    a recorded score with a different one and destroy the comparison it was
+    run to produce."""
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    args, scores = _grade_setup(tmp_path, None)
+    good = {"content": json.dumps(VERDICT), "finish_reason": "stop",
+            "completion_tokens": 20, "total_tokens": 100}
+    with patch.object(score_objective, "call_model", return_value=good):
+        cmd_grade(args)
+    first = json.loads(list(Path(scores).glob("*.json"))[0].read_text(encoding="utf-8"))
+    assert first["score"] == 1.0
+
+    args.skip_existing = True
+    flipped = {"content": json.dumps({"criteria_met": {"c1": False, "c2": False},
+                                      "hard_fail_triggered": False,
+                                      "hard_fail_reason": None}),
+               "finish_reason": "stop", "completion_tokens": 20, "total_tokens": 100}
+    with patch.object(score_objective, "call_model", return_value=flipped) as m:
+        cmd_grade(args)
+    assert m.call_count == 0
+    after = json.loads(list(Path(scores).glob("*.json"))[0].read_text(encoding="utf-8"))
+    assert after["score"] == 1.0

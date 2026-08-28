@@ -1,0 +1,18 @@
+{
+  "task_id": "research_001",
+  "provider": "google",
+  "model": "gemini-3.5-flash",
+  "run_index": 0,
+  "score": 0.0,
+  "criteria_met": {
+    "c1": false,
+    "c2": false,
+    "c3": true,
+    "c4": false
+  },
+  "hard_fail_triggered": true,
+  "hard_fail_reason": "The answer attributes specific findings to fabricated papers (e.g., Gao et al., 2022 \"Scaling Laws for Reward Model Overoptimization\") and possibly misstates details of other cited works, triggering a hard fail.",
+  "grader_provider": "groq",
+  "grader_model": "openai/gpt-oss-120b",
+  "source_transcript": "research_001__google_gemini-3.5-flash__run0.json"
+}

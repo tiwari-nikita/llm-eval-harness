@@ -1,0 +1,18 @@
+{
+  "task_id": "documents_001",
+  "provider": "google",
+  "model": "gemini-3.5-flash-lite",
+  "run_index": 0,
+  "score": 1.0,
+  "criteria_met": {
+    "c1": true,
+    "c2": true,
+    "c3": true,
+    "c4": true
+  },
+  "hard_fail_triggered": false,
+  "hard_fail_reason": null,
+  "grader_provider": "groq",
+  "grader_model": "openai/gpt-oss-120b",
+  "source_transcript": "documents_001__google_gemini-3.5-flash-lite__run0.json"
+}

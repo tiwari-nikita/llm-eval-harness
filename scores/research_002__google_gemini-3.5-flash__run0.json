@@ -1,0 +1,17 @@
+{
+  "task_id": "research_002",
+  "provider": "google",
+  "model": "gemini-3.5-flash",
+  "run_index": 0,
+  "score": 0.0,
+  "criteria_met": {
+    "c1": true,
+    "c2": true,
+    "c3": true
+  },
+  "hard_fail_triggered": true,
+  "hard_fail_reason": "Citation of non-existent benchmark or study (Patronus AI)",
+  "grader_provider": "groq",
+  "grader_model": "openai/gpt-oss-120b",
+  "source_transcript": "research_002__google_gemini-3.5-flash__run0.json"
+}

@@ -1,0 +1,18 @@
+{
+  "task_id": "research_001",
+  "provider": "google",
+  "model": "gemini-3.5-flash-lite",
+  "run_index": 0,
+  "score": 0.0,
+  "criteria_met": {
+    "c1": false,
+    "c2": false,
+    "c3": false,
+    "c4": false
+  },
+  "hard_fail_triggered": true,
+  "hard_fail_reason": "The answer attributes specific findings to papers that do not exist or misrepresents their content (e.g., Gao et al. 2022 \"Scaling Laws for Reward Model Overoptimization\", Skalse et al. 2022, Coste et al. 2023). This violates the hard‑fail condition.",
+  "grader_provider": "groq",
+  "grader_model": "openai/gpt-oss-120b",
+  "source_transcript": "research_001__google_gemini-3.5-flash-lite__run0.json"
+}

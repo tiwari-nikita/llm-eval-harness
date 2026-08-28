@@ -230,11 +230,41 @@ What matters here is mostly not the numbers:
   criteria require judging whether factual claims and citations hold up —
   exactly the judgment a language model is least able to make. Model-graded
   scoring looks viable for the structural category and not for the factual
-  one. The graders also agree perfectly on `hard_fail`, an egregious binary
-  call, and diverge on fine-grained criteria. Treat hard fails as signal.
+  one.
 
   Second-grader output lives in `/scores_gemini` alongside `/scores` rather
   than replacing it, since the disagreement *is* the finding.
+
+- **`hard_fail` is not trustworthy either. This supersedes an earlier claim
+  here that it was.** When both graders agreed that `research_001`'s gpt-oss
+  answers fabricated citations, that looked like the one reliable signal in
+  the set. Adding Gemini models as *subjects* broke it.
+
+  The `gpt-oss-120b` grader hard-failed `gemini-3.5-flash` on `research_001`
+  for "attributing findings to fabricated papers (e.g., Gao et al., 2022
+  *Scaling Laws for Reward Model Overoptimization*)". That paper is real —
+  arXiv 2210.10760 — and the citation is exact. So are *Learning to summarize
+  with human feedback* (Stiennon et al. 2020) and *Direct Preference
+  Optimization* (Rafailov et al. 2023), also cited in the same answer. Its
+  only genuine defects are two title slips: Perez et al. 2022 is
+  *Model-Written Evaluations*, and Ziegler et al. 2019 is *from Human
+  Preferences*.
+
+  So the grader gave 0.00 to the *better-cited* answer. The gpt-oss answer
+  that also scored 0.00 had invented titles wholesale. Identical scores,
+  opposite realities.
+
+  The shape of the error matters more than the error. This is not random
+  noise that averages out across runs: the grader is wrong about *one
+  specific paper in both directions*, correctly catching an invented Gao
+  title and then rejecting the genuine one. Error correlated with the claim
+  rather than with the sample cannot be fixed by drawing more samples.
+  **Model-graded citation checking does not work here, and the `research`
+  scores should not be used at all** — not as a ranking, not as a floor, not
+  as evidence a model fabricates.
+
+  (Checked against my own knowledge of these papers, which has exactly the
+  failure mode this bullet is about. The hand-check is what settles it.)
 - **The model grader is not deterministic either.** Re-running it on an
   unchanged transcript once flipped a criterion and moved the score from 1.00
   to 0.75 with no other input changed. Between that and the cross-grader
