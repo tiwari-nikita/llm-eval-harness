@@ -8,7 +8,7 @@ the same shape vote_pairwise.py and chat_vote.py produce so router.py reads
 all three identically.
 
 Usage:
-    python ingest_votes.py votes_advisory_nikita.json
+    python ingest_votes.py votes_advisory_alex.json
     python ingest_votes.py votes_*.json          # several graders at once
 """
 
