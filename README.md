@@ -1,7 +1,7 @@
-# Model eval
+# LLM Evaluation Harness & Model Router
 
 A personal harness for picking which free-tier model to use for what, based
-on this person's actual usage rather than public leaderboards. Full design
+on my actual usage rather than public leaderboards. Full design
 rationale is in [eval-spec.md](eval-spec.md).
 
 ## Layout
@@ -301,3 +301,7 @@ aren't usable.
 Advisory: blind pairwise only, on `held_position`, `specificity`,
 `context_retention`, `honesty`, `overall`. Model identities hidden until
 the vote is recorded; log the date, since preferences drift.
+
+## License
+
+MIT (see [LICENSE](LICENSE)).
