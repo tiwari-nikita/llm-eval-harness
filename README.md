@@ -4,6 +4,43 @@ A personal harness for picking which free-tier model to use for what, based
 on my actual usage rather than public leaderboards. Full design
 rationale is in [eval-spec.md](eval-spec.md).
 
+## Start here: replay
+
+The rest of this harness ran for weeks without producing an answer to its
+one question. The advisory category, which the router weights most heavily,
+has zero votes, because one vote meant reading about 4,500 words and making
+five judgments. The model grader, the only other signal, turned out to
+decide which model won. And the test tasks were mostly about AI research,
+which is roughly 2.5% of what the chat history is actually about.
+
+`replay.py` answers the question from the other direction. It takes the
+opening prompt of each of your real conversations, sends a sample to two
+free models at a time, and asks you to pick between the answers with one
+keypress. What comes out is a model card: which model to use for each kind
+of thing you actually ask, and how sure that is.
+
+```
+python replay.py sample                                  # nothing is sent
+#   open prompts/replay/review.html, untick anything, download the approval
+python replay.py run --approved approved_<id>.json --dry-run
+python replay.py run --approved approved_<id>.json       # builds pick.html
+#   open prompts/replay/pick.html:  ← A   → B   ↓ tie   X both bad
+python replay.py card picks_<id>.json
+```
+
+Privacy is enforced in code, not left to care. `sample` sends nothing.
+Prompts that mention a relationship, health, money, a visa, birth details
+or contact details start unticked. Ticking a whole group never opts in a
+flagged prompt. `run` refuses any prompt or provider the approval doesn't
+list, and refuses an approval made for a different sample. Everything lives
+under `prompts/replay/`, which is gitignored. The review page names each
+provider's data-use terms. Google AI Studio's free tier, for one, may use
+prompts to improve Google products.
+
+The pick page holds no model names and never reveals them, not even after a
+pick. After a few dozen reveals you would learn each model's house style and
+start voting on the brand. `card` is what joins picks back to models.
+
 ## Layout
 
 ```
@@ -13,6 +50,9 @@ rationale is in [eval-spec.md](eval-spec.md).
 /scores       graded objective results
 /preference   blind pairwise votes
 /router       selection logic reading /scores and /preference
+replay.py         real prompts -> blind one-keypress picks -> your model card
+replay_review_template.html  privacy review page; nothing is sent until approved
+replay_pick_template.html    the pick page; holds no model names
 providers.yaml    model/endpoint config for runner.py
 runner.py         sends task turns to models, saves transcripts
 score_objective.py  model-graded + hand-sample grading for research/documents
@@ -92,6 +132,20 @@ python router.py rank --category research
 ```
 
 ## Known limitations (by design, not oversight)
+
+- **Replay measures short answers to opening prompts.** Every model gets
+  "Keep your reply under 150 words", so that a pick takes about a minute
+  rather than five. And only the first message of each conversation is
+  replayed, since later turns lean on context the replay can't supply.
+  So the card ranks each model's best short first answer, not its best
+  conversation. Openings with an image or file attached are left out, since
+  the models would never see the attachment.
+- **Replay's topics are keyword rules, tuned to one chat history.** They're
+  better than `taxonomy.py` on this corpus: 18% land in "other", against 88%.
+  They are still rules, so the review page lets you move any prompt to
+  another topic before approving. Each prompt is compared on one pair out of
+  the six possible, so 150 picks spread across 12 topics leave the smaller
+  rows at "too few picks". That's the honest reading at that n, not a bug.
 
 - **Fixed turns.** Multi-turn advisory scripts send identical text to every
   model regardless of how it replies. This is artificial — a real

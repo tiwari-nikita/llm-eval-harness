@@ -38,3 +38,8 @@ catalogue.json
 grade_*.html
 !grade_template.html
 votes_*.json
+
+# replay approval and picks downloads, in case one is saved into the repo;
+# everything else replay.py writes is under /prompts already
+approved_*.json
+picks_*.json
