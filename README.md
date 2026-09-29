@@ -26,7 +26,18 @@ python replay.py run --approved approved_<id>.json --dry-run
 python replay.py run --approved approved_<id>.json       # builds pick.html
 #   open prompts/replay/pick.html:  ← A   → B   ↓ tie   X both bad
 python replay.py card picks_<id>.json
+python replay.py judge                                   # optional, see below
 ```
+
+`judge` gives the repo's two graders, `gpt-oss-120b` and `gemini-3.6-flash`,
+exactly the pairs you picked on, with the same answers on the same sides.
+The card then reports how often each one agrees with you, against the 80%
+line eval-spec.md sets. It also shows whether each leans toward the left
+answer or the longer one, and whether it picks its own model family more
+often than you did on those same pairs. The earlier results here showed
+the graders disagree with each other. This measures them against the person
+they're supposed to stand in for. A judge only sees prompts you approved,
+and only if you approved its provider.
 
 Privacy is enforced in code, not left to care. `sample` sends nothing.
 Prompts that mention a relationship, health, money, a visa, birth details
