@@ -526,3 +526,161 @@ def test_load_env_file_fills_missing_without_overriding(tmp_path, monkeypatch):
     import os
     assert os.environ["GROQ_API_KEY"] == "already-set"
     assert os.environ["GOOGLE_API_KEY"] == "g"
+
+
+# ---------------------------------------------------------------- judges
+
+class JudgeArgs:
+    def __init__(self, providers_file, judge=None, dry_run=False):
+        self.judge, self.providers_file, self.dry_run = judge, str(providers_file), dry_run
+        self.max_tokens, self.tpm, self.gap = 3000, 100000, 0
+
+
+@pytest.mark.parametrize("text,choice", [
+    ("B", "b"),
+    ("A", "a"),
+    ("TIE", "tie"),
+    ("Answer A hedges; B commits to a plan.\n\nB", "b"),
+    ("Both are fine, so: tie", "tie"),
+    ("a thoughtful answer either way", None),
+    ("", None),
+])
+def test_parse_judgment_takes_the_last_verdict(text, choice):
+    assert rp.parse_judgment(text) == choice
+
+
+def test_judge_refuses_a_provider_you_did_not_approve(tmp_path, providers_file, keys):
+    _run_all(tmp_path, providers_file)
+    approved = json.loads((rp.REPLAY_DIR / "approved.json").read_text())
+    approved["providers"] = ["groq"]
+    (rp.REPLAY_DIR / "approved.json").write_text(json.dumps(approved))
+    with patch.object(rp, "call_model") as cm, pytest.raises(SystemExit, match="not approved"):
+        rp.cmd_judge(JudgeArgs(providers_file, judge=["google:gemini-3.6-flash"]))
+    cm.assert_not_called()
+
+
+def test_judge_sees_the_same_answers_on_the_same_sides(tmp_path, providers_file, keys):
+    _run_all(tmp_path, providers_file)
+    bundle, _ = _page_bundle()
+    with patch.object(rp, "call_model", return_value=_fake_reply("A")) as cm:
+        rp.cmd_judge(JudgeArgs(providers_file, judge=["groq:openai/gpt-oss-120b"]))
+    assert cm.call_count == len(bundle["items"])
+    sent = [c.args[3][0]["content"] for c in cm.call_args_list]
+    for it in bundle["items"]:
+        assert any(f"Answer A:\n---\n{it['a']}\n---\n\nAnswer B:\n---\n{it['b']}\n" in s
+                   and it["prompt"] in s for s in sent)
+
+
+def test_judge_never_sees_an_unapproved_prompt(tmp_path, providers_file, keys):
+    items = _items(4)
+    items[3]["text"] = "PRIVATE unapproved text"
+    _write_sample(tmp_path, items)
+    approved = _approval(tmp_path, include=["p_000", "p_001", "p_002"])
+    with patch.object(rp, "call_model", return_value=_fake_reply()):
+        rp.cmd_run(RunArgs(approved, providers_file))
+    with patch.object(rp, "call_model", return_value=_fake_reply("B")) as cm:
+        rp.cmd_judge(JudgeArgs(providers_file, judge=["groq:openai/gpt-oss-120b"]))
+    assert not any("PRIVATE" in c.args[3][0]["content"] for c in cm.call_args_list)
+
+
+def test_judge_resumes_and_retries_a_cut_off_verdict(tmp_path, providers_file, keys):
+    _run_all(tmp_path, providers_file)
+    cut = dict(_fake_reply("Weighing A against"), finish_reason="length")
+    with patch.object(rp, "call_model", side_effect=[cut] + [_fake_reply("B")] * 20) as cm:
+        rp.cmd_judge(JudgeArgs(providers_file, judge=["groq:openai/gpt-oss-120b"]))
+        first = cm.call_count
+        rp.cmd_judge(JudgeArgs(providers_file, judge=["groq:openai/gpt-oss-120b"]))
+    assert cm.call_count == first + 1  # only the cut-off one is asked again
+    verdicts = rp.load_judges()["groq/openai/gpt-oss-120b"]
+    assert all(v["choice"] == "b" for v in verdicts.values())
+
+
+def test_one_judges_daily_quota_does_not_stop_the_other(tmp_path, providers_file, keys):
+    _run_all(tmp_path, providers_file)
+
+    def fake(base_url, key, model, messages, **kw):
+        if model == "gemini-3.6-flash":
+            raise DailyQuotaExceeded("gone")
+        return _fake_reply("A")
+    with patch.object(rp, "call_model", side_effect=fake):
+        rp.cmd_judge(JudgeArgs(providers_file))
+    judges = rp.load_judges()
+    assert len(judges["groq/openai/gpt-oss-120b"]) == 6
+    assert not judges.get("google/gemini-3.6-flash")
+
+
+def test_judge_dry_run_sends_nothing(tmp_path, providers_file, keys):
+    _run_all(tmp_path, providers_file)
+    with patch.object(rp, "call_model") as cm:
+        rp.cmd_judge(JudgeArgs(providers_file, dry_run=True))
+    cm.assert_not_called()
+
+
+def _judged_store(n=40):
+    """Pairs of gpt-oss-20b vs gemini; you always pick gemini, on either side."""
+    store, agreeing, own_family = {}, {}, {}
+    for i in range(n):
+        gpt_left = i % 2 == 0
+        a, b = ("groq/openai/gpt-oss-20b", "google/gemini-3.5-flash")[::1 if gpt_left else -1]
+        yours = "b" if gpt_left else "a"
+        store[f"p{i}"] = {"model_a": a, "model_b": b, "choice": yours, "topic": "social",
+                          "tags": [], "a_words": 10, "b_words": 10}
+        agreeing[f"p{i}"] = {"choice": yours}
+        own_family[f"p{i}"] = {"choice": "a" if gpt_left else "b"}
+    return store, agreeing, own_family
+
+
+def test_render_judges_calls_a_judge_that_matches_you_a_stand_in():
+    store, agreeing, _ = _judged_store()
+    text = "\n".join(rp.render_judges(store, {"google/gemini-3.6-flash": agreeing}, {}))
+    assert "agrees with your pick on 100% of 40" in text
+    assert "close enough to stand in for you" in text
+
+
+def test_render_judges_exposes_self_family_preference():
+    store, _, own_family = _judged_store()
+    text = "\n".join(rp.render_judges(store, {"groq/openai/gpt-oss-120b": own_family}, {}))
+    assert "agrees with your pick on 0% of 40" in text
+    assert "disagrees with you too often" in text
+    assert "picks its own family's answer 100% of 40 times (you, same pairs: 0%)" in text
+
+
+def test_render_judges_counts_unreadable_verdicts():
+    store, agreeing, _ = _judged_store(10)
+    agreeing["p0"] = {"choice": None}
+    text = "\n".join(rp.render_judges(store, {"google/gemini-3.6-flash": agreeing}, {}))
+    assert "1 verdict(s) it gave could not be read" in text
+
+
+def test_card_includes_the_judge_section_when_judges_exist():
+    store, agreeing, _ = _judged_store()
+    card = rp.render_card(store, {"google/gemini-3.6-flash": agreeing})
+    assert "LLM judges on your pairs" in card
+    assert "same top pick as you in 1 of 1 topic(s)" in card
+
+
+def test_judge_obeys_a_narrowed_approval_over_an_older_pick_page(tmp_path, providers_file, keys):
+    """The pick page can predate the current approval, e.g. if you narrowed it
+    and the run then stopped. The approval, not the page, decides what goes out."""
+    items = _items(3)
+    items[2]["text"] = "PRIVATE later unticked"
+    _write_sample(tmp_path, items)
+    with patch.object(rp, "call_model", return_value=_fake_reply()):
+        rp.cmd_run(RunArgs(_approval(tmp_path, include=["p_000", "p_001", "p_002"]), providers_file))
+    narrowed = json.loads((rp.REPLAY_DIR / "approved.json").read_text())
+    narrowed["include"] = ["p_000", "p_001"]
+    (rp.REPLAY_DIR / "approved.json").write_text(json.dumps(narrowed))
+    with patch.object(rp, "call_model", return_value=_fake_reply("A")) as cm:
+        rp.cmd_judge(JudgeArgs(providers_file, judge=["groq:openai/gpt-oss-120b"]))
+    assert cm.call_count == 2
+    assert not any("PRIVATE" in c.args[3][0]["content"] for c in cm.call_args_list)
+
+
+def test_run_that_stops_on_a_missing_key_records_no_approval(tmp_path, providers_file, monkeypatch):
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv("GROQ_API_KEY", "k1")
+    monkeypatch.setattr(rp, "load_env_file", lambda path: None)
+    _write_sample(tmp_path, _items(3))
+    with pytest.raises(SystemExit):
+        rp.cmd_run(RunArgs(_approval(tmp_path), providers_file))
+    assert not (rp.REPLAY_DIR / "approved.json").exists()

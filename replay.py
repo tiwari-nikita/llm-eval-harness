@@ -10,6 +10,14 @@ Three commands, in order:
     python replay.py run --approved <file>       # send only what you approved
     python replay.py card <picks file>           # fold in your picks, print the card
 
+And one optional, once you have picks:
+
+    python replay.py judge                       # LLM judges pick on the same pairs
+
+which adds to the card how often each judge agrees with you, how it leans,
+and whether it favours its own model family -- the question this repo's
+grader findings raise, answered against a real person's choices.
+
 Why this exists: the advisory vote never happened. One vote meant reading
 ~4,500 words and making five judgments, so nobody cast any. Here one vote is
 one short prompt, two short answers and one keypress, on prompts taken from
@@ -555,11 +563,6 @@ def cmd_run(args):
         print("\nDry run: nothing sent.")
         return
 
-    # copied only on a real run, so the record matches what was actually sent
-    REPLAY_DIR.mkdir(parents=True, exist_ok=True)
-    (REPLAY_DIR / "approved.json").write_text(
-        Path(args.approved).read_text(encoding="utf-8"), encoding="utf-8")
-
     load_env_file(ROOT / ".env")
     keys = {p: os.environ.get(providers_cfg[p]["api_key_env"]) for p in providers}
     missing = [providers_cfg[p]["api_key_env"] for p, k in keys.items() if not k]
@@ -567,6 +570,11 @@ def cmd_run(args):
         # dropping a provider would silently change which pairs get compared
         sys.exit(f"missing API key(s): {', '.join(missing)}. Set them or add them "
                  "to .env; the approved providers must all be runnable.")
+
+    # copied only once sending is certain, so the record matches what was sent
+    REPLAY_DIR.mkdir(parents=True, exist_ok=True)
+    (REPLAY_DIR / "approved.json").write_text(
+        Path(args.approved).read_text(encoding="utf-8"), encoding="utf-8")
 
     budgets = {p: TokenBudget(args.tpm) for p in providers}
     exhausted = set()
@@ -775,7 +783,7 @@ def bias_checks(records):
             "both_bad": sum(1 for r in records if r["choice"] == "both_bad")}
 
 
-def render_card(store):
+def render_card(store, judges=None):
     records = list(store.values())
     if not records:
         return "No picks yet. Open prompts/replay/pick.html and start picking."
@@ -784,9 +792,9 @@ def render_card(store):
     for r in records:
         by_topic[r["topic"]].append(r)
 
-    rows = []
-    for t in sorted(by_topic, key=lambda t: -len(by_topic[t])):
-        rows.append((TOPIC_LABELS.get(t, t), topic_verdict(by_topic[t], models)))
+    mine = {t: topic_verdict(by_topic[t], models)
+            for t in sorted(by_topic, key=lambda t: -len(by_topic[t]))}
+    rows = [(TOPIC_LABELS.get(t, t), v) for t, v in mine.items()]
     rows.append(("Everything", topic_verdict(records, models)))
 
     lines = [f"Your model card  ·  {len(records)} picks  ·  "
@@ -820,6 +828,7 @@ def render_card(store):
     if tag_counts:
         lines.append("    reasons you gave          "
                      + ", ".join(f"{t} {c}" for t, c in tag_counts.most_common()))
+    lines += render_judges(store, judges or {}, mine)
     lines += ["",
               "  How sure = share of 400 resamples of your picks in which the same",
               "  model comes out on top. Undecided = ties plus both-bad. A topic that",
@@ -828,12 +837,232 @@ def render_card(store):
     return "\n".join(lines)
 
 
+# --------------------------------------------------------------------------
+# LLM judges, on the same blind pairs
+
+
+# The repo's two graders, from unrelated families; see score_objective.py.
+DEFAULT_JUDGES = ["groq:openai/gpt-oss-120b", "google:gemini-3.6-flash"]
+JUDGE_MAX_TOKENS = 3000  # both spend a hidden reasoning budget before the verdict
+
+JUDGE_PROMPT = """Someone asked an AI assistant the question below and got two \
+answers. Decide which answer they would rather have received. Both assistants \
+were told: "{system}" Judge the answers only; which one is listed first says \
+nothing about quality.
+
+Question:
+---
+{prompt}
+---
+
+Answer A:
+---
+{a}
+---
+
+Answer B:
+---
+{b}
+---
+
+Reply with exactly one word: A, B, or TIE."""
+
+_VERDICT_RE = re.compile(r"\b(A|B|TIE|[Tt]ie)\b")
+
+
+def parse_judgment(text):
+    """The judge's last A/B/TIE, or None.
+
+    The last one, because a judge that reasons aloud mentions both letters
+    before it concludes. Uppercase A and B only, so the article "a" is not
+    read as a vote.
+    """
+    found = _VERDICT_RE.findall(text or "")
+    if not found:
+        return None
+    last = found[-1]
+    return "tie" if last.lower() == "tie" else last.lower()
+
+
+def family(model):
+    return short_name(model).split("-")[0].lower()
+
+
+def latest_pick_state():
+    states = sorted(REPLAY_DIR.glob("pick_state_*.json"),
+                    key=lambda p: json.loads(p.read_text(encoding="utf-8")).get("created", ""))
+    if not states:
+        sys.exit("no pick page yet. Run: python replay.py run --approved <file>")
+    return json.loads(states[-1].read_text(encoding="utf-8"))
+
+
+def judge_path(provider, model):
+    return REPLAY_DIR / "judges" / f"{provider}_{safe_slug(model)}.json"
+
+
+def load_judges():
+    out = {}
+    for path in sorted((REPLAY_DIR / "judges").glob("*.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        out[data["judge"]] = data["verdicts"]
+    return out
+
+
+def cmd_judge(args):
+    """Ask LLM judges to pick on exactly the pairs, and sides, you picked on.
+
+    The same approval gates this as `run`: a judge only sees prompts you
+    approved, and only if its provider was one you approved sending them to.
+    """
+    sample_path = REPLAY_DIR / "sample.json"
+    approved_path = REPLAY_DIR / "approved.json"
+    if not (sample_path.exists() and approved_path.exists()):
+        sys.exit("nothing approved has been run yet. Run: python replay.py run --approved <file>")
+    sample = json.loads(sample_path.read_text(encoding="utf-8"))
+    items, providers = load_approval(sample, approved_path)
+    approved_ids = {it["id"] for it in items}
+    prompts = {it["id"]: it["text"] for it in items}
+    state = latest_pick_state()
+    mapping = {i: m for i, m in state["mapping"].items() if i in approved_ids}
+
+    providers_cfg = load_providers(args.providers_file)
+    judges = []
+    for spec in args.judge or DEFAULT_JUDGES:
+        provider, _, model = spec.partition(":")
+        if provider not in providers:
+            sys.exit(f"judge {spec}: provider {provider!r} was not approved to receive "
+                     f"these prompts (approved: {', '.join(providers)}).")
+        judges.append((provider, model))
+
+    todo = {}
+    for provider, model in judges:
+        path = judge_path(provider, model)
+        done = json.loads(path.read_text(encoding="utf-8"))["verdicts"] if path.exists() else {}
+        todo[(provider, model)] = [i for i in mapping if i not in done]
+        print(f"{provider}/{model}: {len(mapping) - len(todo[(provider, model)])} judged, "
+              f"{len(todo[(provider, model)])} to go")
+    if args.dry_run:
+        print("\nDry run: nothing sent.")
+        return
+
+    load_env_file(ROOT / ".env")
+    budgets = {p: TokenBudget(args.tpm) for p in providers}
+    (REPLAY_DIR / "judges").mkdir(parents=True, exist_ok=True)
+    for (provider, model), ids in todo.items():
+        cfg = providers_cfg[provider]
+        key = os.environ.get(cfg["api_key_env"])
+        if ids and not key:
+            print(f"{provider}/{model}: no {cfg['api_key_env']} set, skipping", file=sys.stderr)
+            continue
+        path = judge_path(provider, model)
+        record = (json.loads(path.read_text(encoding="utf-8")) if path.exists()
+                  else {"judge": f"{provider}/{model}", "verdicts": {}})
+        for n, item_id in enumerate(ids, 1):
+            side = mapping[item_id]
+            a = healthy_answer(answer_path(item_id, side["a"]["provider"], side["a"]["model"]))
+            b = healthy_answer(answer_path(item_id, side["b"]["provider"], side["b"]["model"]))
+            if not (a and b):
+                continue
+            prompt = JUDGE_PROMPT.format(system=sample["system"], prompt=prompts[item_id],
+                                         a=a["content"], b=b["content"])
+            print(f"[{n}/{len(ids)}] {provider}/{model} judging {item_id}")
+            try:
+                reply = call_model(cfg["base_url"], key, model,
+                                   [{"role": "user", "content": prompt}],
+                                   max_tokens=args.max_tokens, budget=budgets[provider])
+            except DailyQuotaExceeded as e:
+                print(f"    daily quota gone for {provider}/{model}; re-run later to "
+                      f"continue ({str(e)[:120]})", file=sys.stderr)
+                break
+            except Exception as e:
+                print(f"    FAILED: {e}", file=sys.stderr)
+                continue
+            if reply["finish_reason"] == "length":
+                # a verdict cut off mid-thought is not a verdict; retry next run
+                print("    verdict hit the token cap; will retry next run", file=sys.stderr)
+                continue
+            record["verdicts"][item_id] = {
+                "choice": parse_judgment(reply["content"]),
+                "raw": reply["content"][-300:],
+                "at": datetime.now(timezone.utc).isoformat()}
+            path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+            time.sleep(args.gap)
+    print("\nNow: python replay.py card")
+
+
+def render_judges(store, judges, mine):
+    """How each judge's picks compare with yours on the very same pairs.
+
+    `mine` is your per-topic verdicts, so the last line can say whether a
+    judge would have handed you the same card.
+    """
+    lines = []
+    for name, verdicts in sorted(judges.items()):
+        both = [i for i in store if i in verdicts]
+        if not both:
+            continue
+        unparsed = sum(1 for i in both if verdicts[i]["choice"] is None)
+        both = [i for i in both if verdicts[i]["choice"] is not None]
+        decisive = [i for i in both if store[i]["choice"] in ("a", "b")]
+        if not decisive:
+            continue
+        agree = sum(verdicts[i]["choice"] == store[i]["choice"] for i in decisive)
+        lo, hi = wilson(agree, len(decisive))
+        if lo >= 0.8:
+            stand_in = "close enough to stand in for you"
+        elif hi < 0.8:
+            stand_in = "disagrees with you too often to stand in for you"
+        else:
+            stand_in = "too few pairs yet to say whether it could stand in for you"
+        lines += ["", f"    {short_name(name)}  ({name.split('/')[0]})",
+                  f"      agrees with your pick on {agree / len(decisive):.0%} of "
+                  f"{len(decisive)} pairs (95% CI {lo:.0%}-{hi:.0%}; a coin gets 50%)",
+                  f"      -> {stand_in} (eval-spec.md draws the line at 80%)"]
+
+        theirs = [dict(store[i], choice=verdicts[i]["choice"], tags=[]) for i in both]
+        yours = [store[i] for i in both]
+        jb, yb = bias_checks(theirs), bias_checks(yours)
+        pct = lambda k, n: f"{k / n:.0%}" if n else "n/a"
+        lines.append(f"      picks the left answer {pct(jb['left'], jb['decisive'])}, the longer "
+                     f"one {pct(jb['longer'], jb['sized'])}  (you, same pairs: "
+                     f"{pct(yb['left'], yb['decisive'])}, {pct(yb['longer'], yb['sized'])})")
+
+        fam = family(name)
+        own = [i for i in both
+               if (family(store[i]["model_a"]) == fam) != (family(store[i]["model_b"]) == fam)]
+        def own_rate(recs):
+            hits = [r for r in recs if r["choice"] in ("a", "b")]
+            k = sum(1 for r in hits
+                    if family(r["model_a" if r["choice"] == "a" else "model_b"]) == fam)
+            return k, len(hits)
+        jk, jn = own_rate([dict(store[i], choice=verdicts[i]["choice"]) for i in own])
+        yk, yn = own_rate([store[i] for i in own])
+        if jn:
+            lines.append(f"      picks its own family's answer {pct(jk, jn)} of {jn} times "
+                         f"(you, same pairs: {pct(yk, yn)})")
+
+        models = sorted({r["model_a"] for r in store.values()} | {r["model_b"] for r in store.values()})
+        called = [(t, v) for t, v in mine.items() if v["verdict"] in ("clear", "leaning")]
+        if called:
+            same = 0
+            for topic, v in called:
+                recs = [r for r in theirs if r["topic"] == topic]
+                same += bool(recs) and topic_verdict(recs, models, n_boot=0)["leader"] == v["leader"]
+            lines.append(f"      same top pick as you in {same} of {len(called)} topic(s) "
+                         "where you have one")
+        if unparsed:
+            lines.append(f"      {unparsed} verdict(s) it gave could not be read as A, B or TIE")
+    if lines:
+        lines = ["", "  LLM judges on your pairs (same prompts, same answers, same sides)"] + lines
+    return lines
+
+
 def cmd_card(args):
     store = ingest(args.paths) if args.paths else None
     if store is None:
         path = REPLAY_DIR / "picks.json"
         store = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    print(render_card(store))
+    print(render_card(store, load_judges() if (REPLAY_DIR / "judges").exists() else {}))
 
 
 def main():
@@ -863,6 +1092,16 @@ def main():
     c = sub.add_parser("card", help="fold in picks and print your model card")
     c.add_argument("paths", nargs="*", help="picks files downloaded from pick.html")
     c.set_defaults(func=cmd_card)
+
+    j = sub.add_parser("judge", help="have LLM judges pick on the same pairs, to compare with you")
+    j.add_argument("--judge", action="append",
+                   help="provider:model, repeatable; default: " + ", ".join(DEFAULT_JUDGES))
+    j.add_argument("--providers-file", default=str(ROOT / "providers.yaml"))
+    j.add_argument("--max-tokens", type=int, default=JUDGE_MAX_TOKENS)
+    j.add_argument("--tpm", type=int, default=DEFAULT_TPM)
+    j.add_argument("--gap", type=float, default=1.0, help="seconds between calls")
+    j.add_argument("--dry-run", action="store_true", help="count what is left, send nothing")
+    j.set_defaults(func=cmd_judge)
 
     args = ap.parse_args()
     args.func(args)
