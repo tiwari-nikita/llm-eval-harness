@@ -44,6 +44,8 @@
   .row input[type=checkbox] { width: 18px; height: 18px; margin-top: 3px; cursor: pointer; }
   .row.off .text { color: var(--muted); }
   .text { white-space: pre-wrap; word-break: break-word; }
+  .num { float: left; min-width: 3.2em; font-weight: 600; color: var(--muted);
+         font-variant-numeric: tabular-nums; }
   .meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
   .chip { font-size: 12px; padding: 1px 8px; border-radius: 10px;
           background: var(--warnbg); color: var(--warn); }
@@ -96,7 +98,10 @@ function banner() {
     <ul>${provs}</ul>
     <p>Each model gets the same instruction first: <i>${esc(SAMPLE.system)}</i></p>
     <p>Prompts flagged as possibly private start unticked. The filters can't catch
-    other people's names, so skim for those too. Your ticks save as you go.</p>`;
+    other people's names, so skim for those too. Your ticks save as you go.</p>
+    <p>No download needed if you'd rather not: tell Claude something like
+    <i>"defaults, drop 12 and 47, add 160"</i> using the numbers below, and it
+    runs <code>replay.py approve</code> for you.</p>`;
 }
 
 function topicOf(it) { return state.topic[it.id] || it.topic; }
@@ -114,8 +119,8 @@ function render() {
            <details><summary>show all ${it.words} words</summary><div class="text">${esc(it.text)}</div></details>`
         : `<div class="text">${esc(it.text)}</div>`;
       return `<div class="row ${state.on[it.id] ? "" : "off"}" data-id="${it.id}">
-        <input type="checkbox" aria-label="send this prompt" ${state.on[it.id] ? "checked" : ""}>
-        <div>${body}
+        <input type="checkbox" aria-label="send prompt ${it.n}" ${state.on[it.id] ? "checked" : ""}>
+        <div><span class="num">#${it.n}</span>${body}
           <div class="meta">
             ${it.flags.map(f => `<span class="chip">${esc(f)}</span>`).join("")}
             <span class="muted">${esc(it.title)}</span>

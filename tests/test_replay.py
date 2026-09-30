@@ -684,3 +684,84 @@ def test_run_that_stops_on_a_missing_key_records_no_approval(tmp_path, providers
     with pytest.raises(SystemExit):
         rp.cmd_run(RunArgs(_approval(tmp_path), providers_file))
     assert not (rp.REPLAY_DIR / "approved.json").exists()
+
+
+# ---------------------------------------------------------------- approve by number
+
+def _numbered_sample(tmp_path):
+    items = _items(6, "social")
+    for k, it in enumerate(items):
+        it["n"] = k + 1
+    items[4].update(topic="health", flags=["mentions health or body"], default=False)
+    items[5].update(topic="health")
+    return _write_sample(tmp_path, items)
+
+
+def test_parse_numbers_reads_lists_and_ranges():
+    assert rp.parse_numbers("12, 47,100-102") == {12, 47, 100, 101, 102}
+    assert rp.parse_numbers("") == set()
+
+
+@pytest.mark.parametrize("bad", ["twelve", "9-3"])
+def test_parse_numbers_refuses_nonsense(bad):
+    with pytest.raises(SystemExit):
+        rp.parse_numbers(bad)
+
+
+def test_topic_key_accepts_key_or_label():
+    assert rp.topic_key("health") == "health"
+    assert rp.topic_key("health, fitness and SKIN") == "health"
+    with pytest.raises(SystemExit):
+        rp.topic_key("gossip")
+
+
+def test_approve_defaults_matches_the_page_defaults(tmp_path):
+    sample = _numbered_sample(tmp_path)
+    approval = rp.build_approval(sample)
+    assert approval["include"] == [it["id"] for it in sample["items"] if it["default"]]
+
+
+def test_approve_drop_add_and_topic_rules(tmp_path):
+    sample = _numbered_sample(tmp_path)
+    ids = {it["n"]: it["id"] for it in sample["items"]}
+    approval = rp.build_approval(sample, drop={1}, add={5}, drop_topics={"health"},
+                                 moves={2: "career"})
+    # 1 dropped; 6 dropped with its topic; 5 is flagged and in that topic, but
+    # added by number, which wins
+    assert set(approval["include"]) == {ids[2], ids[3], ids[4], ids[5]}
+    assert approval["topics"] == {ids[2]: "career"}
+
+
+def test_approve_refuses_unknown_numbers_and_contradictions(tmp_path):
+    sample = _numbered_sample(tmp_path)
+    with pytest.raises(SystemExit, match="no prompt numbered 99"):
+        rp.build_approval(sample, drop={99})
+    with pytest.raises(SystemExit, match="both dropped and added"):
+        rp.build_approval(sample, drop={3}, add={3})
+
+
+def test_approve_refuses_an_unnumbered_sample_and_says_how_to_fix_it(tmp_path):
+    sample = _write_sample(tmp_path, _items(3))
+    with pytest.raises(SystemExit, match="--seed 3"):
+        rp.build_approval(sample)
+
+
+def test_approval_from_numbers_passes_the_same_gate_as_a_download(tmp_path):
+    sample = _numbered_sample(tmp_path)
+    path = tmp_path / "a.json"
+    path.write_text(json.dumps(rp.build_approval(sample, add={5})), encoding="utf-8")
+    items, providers = rp.load_approval(sample, path)
+    assert len(items) == 6 and providers == ["groq", "google"]  # 5 defaults + #5
+
+
+def test_cmd_approve_writes_the_file_and_sends_nothing(tmp_path, capsys):
+    _numbered_sample(tmp_path)
+
+    class A:
+        drop, add, drop_topic, move = "1", "5", None, None
+    with patch("runner.requests.post") as post:
+        rp.cmd_approve(A())
+        post.assert_not_called()
+    out = capsys.readouterr().out
+    assert "added flagged #5 [mentions health or body]" in out
+    assert (rp.REPLAY_DIR / "approved_s1.json").exists()
