@@ -419,8 +419,11 @@ def cmd_sample(args):
         "export": str(export_path), "providers": names,
         "system": REPLAY_SYSTEM,
         "topics": TOPIC_LABELS,
-        "items": [{k: it[k] for k in ("id", "title", "text", "words", "topic",
-                                      "flags", "default")} for it in items],
+        # `n` is the number shown on the review page, so a choice can be given
+        # in chat as "drop 12" and applied with `replay.py approve`
+        "items": [dict({k: it[k] for k in ("id", "title", "text", "words", "topic",
+                                           "flags", "default")}, n=k + 1)
+                  for k, it in enumerate(items)],
     }
     REPLAY_DIR.mkdir(parents=True, exist_ok=True)
     (REPLAY_DIR / "sample.json").write_text(
@@ -535,6 +538,106 @@ def healthy_answer(path):
     except (OSError, ValueError):
         return None
     return data if data.get("content", "").strip() else None
+
+
+def parse_numbers(spec):
+    """'12, 47, 100-103' -> {12, 47, 100, 101, 102, 103}."""
+    out = set()
+    for part in (spec or "").replace(" ", "").split(","):
+        if not part:
+            continue
+        lo, sep, hi = part.partition("-")
+        try:
+            lo = int(lo)
+            hi = int(hi) if sep else lo
+        except ValueError:
+            sys.exit(f"can't read {part!r} as a prompt number or range like 10-14")
+        if lo > hi:
+            sys.exit(f"range {part!r} runs backwards")
+        out.update(range(lo, hi + 1))
+    return out
+
+
+def topic_key(name):
+    """A topic by its key ("health") or its label, ignoring case."""
+    wanted = name.strip().lower()
+    for key, label in TOPIC_LABELS.items():
+        if wanted in (key, label.lower()):
+            return key
+    sys.exit(f"unknown topic {name!r}; use one of: {', '.join(TOPIC_LABELS)}")
+
+
+def build_approval(sample, drop=(), add=(), drop_topics=(), moves=None):
+    """The same approval the review page downloads, built from numbers instead.
+
+    Starts from the page's default ticks. Then, in this order: whole topics
+    dropped, numbers added, numbers dropped -- so "drop Health, add 160" keeps
+    160 even if it is in Health. A number both added and dropped is refused
+    rather than guessed at.
+    """
+    items = sample["items"]
+    if any("n" not in it for it in items):
+        sys.exit("this sample predates numbering. Re-run: python replay.py sample "
+                 f"--seed {sample['seed']}  (same prompts, now numbered)")
+    by_n = {it["n"]: it for it in items}
+    moves = moves or {}
+    unknown = sorted((set(drop) | set(add) | set(moves)) - set(by_n))
+    if unknown:
+        sys.exit(f"no prompt numbered {', '.join(map(str, unknown))}; "
+                 f"this sample runs 1-{len(items)}")
+    clash = sorted(set(drop) & set(add))
+    if clash:
+        sys.exit(f"{', '.join(map(str, clash))} both dropped and added; say which")
+
+    on = {it["id"] for it in items if it["default"]}
+    for it in items:
+        if it["topic"] in drop_topics:
+            on.discard(it["id"])
+    on |= {by_n[n]["id"] for n in add}
+    on -= {by_n[n]["id"] for n in drop}
+    return {
+        "sample_id": sample["sample_id"],
+        "approved_at": datetime.now(timezone.utc).isoformat(),
+        "providers": sample["providers"],
+        "include": [it["id"] for it in items if it["id"] in on],
+        "topics": {by_n[n]["id"]: t for n, t in moves.items()},
+        "via": "replay.py approve",
+    }
+
+
+def cmd_approve(args):
+    sample_path = REPLAY_DIR / "sample.json"
+    if not sample_path.exists():
+        sys.exit("no sample yet. Run: python replay.py sample")
+    sample = json.loads(sample_path.read_text(encoding="utf-8"))
+    moves = {}
+    for spec in args.move or []:
+        n, _, topic = spec.partition("=")
+        moves[int(n)] = topic_key(topic)
+    drop_topics = {topic_key(t) for t in args.drop_topic or []}
+    approval = build_approval(sample, parse_numbers(args.drop), parse_numbers(args.add),
+                              drop_topics, moves)
+
+    by_n = {it["n"]: it for it in sample["items"]}
+    on = set(approval["include"])
+    snippet = lambda it: " ".join(it["text"].split())[:70]
+    print(f"Approval for sample {sample['sample_id']}: {len(on)} of "
+          f"{len(sample['items'])} prompts, to {', '.join(sample['providers'])}.")
+    for t in sorted(drop_topics):
+        print(f"  dropped topic: {TOPIC_LABELS[t]}")
+    for n in sorted(parse_numbers(args.drop)):
+        print(f"  dropped #{n}: {snippet(by_n[n])}")
+    flagged_in = [it for it in sample["items"] if it["id"] in on and it["flags"]]
+    for it in flagged_in:
+        # these are the ones worth a second look, so name them outright
+        print(f"  added flagged #{it['n']} [{'; '.join(it['flags'])}]: {snippet(it)}")
+    for n, t in sorted(moves.items()):
+        print(f"  moved #{n} to {TOPIC_LABELS[t]}")
+
+    out = REPLAY_DIR / f"approved_{sample['sample_id']}.json"
+    out.write_text(json.dumps(approval, indent=2), encoding="utf-8")
+    print(f"\nWrote {out}\nNothing sent. Next:\n"
+          f"  python replay.py run --approved {out} --dry-run")
 
 
 def cmd_run(args):
@@ -1079,6 +1182,14 @@ def main():
                    help="flagged prompts offered unticked")
     s.add_argument("--seed", type=int)
     s.set_defaults(func=cmd_sample)
+
+    a = sub.add_parser("approve", help="write an approval from prompt numbers, "
+                                       "instead of downloading one from the review page")
+    a.add_argument("--drop", help="numbers to leave out, e.g. 12,47,100-103")
+    a.add_argument("--add", help="numbers to send that start unticked (flagged ones)")
+    a.add_argument("--drop-topic", action="append", help="leave out a whole topic; repeatable")
+    a.add_argument("--move", action="append", help="N=topic, to relabel prompt N; repeatable")
+    a.set_defaults(func=cmd_approve)
 
     r = sub.add_parser("run", help="send approved prompts and build the pick page")
     r.add_argument("--approved", required=True, help="file downloaded from review.html")
