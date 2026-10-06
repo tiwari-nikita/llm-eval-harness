@@ -6,7 +6,8 @@ task's binary criteria and hard_fail list.
 Two modes:
   grade        model-graded first pass, writes /scores/<task>__<model>.json
   hand-sample  pull a random 15% of already-graded transcripts for you to
-               re-grade by hand, then report the disagreement rate
+               re-grade by hand, then report the disagreement rate with a
+               95% interval and save every hand grade to scores_hand/
 
 Score = met / total criteria, unless any hard_fail is triggered, in which
 case the score is zero regardless of criteria met (see eval-spec.md).
@@ -30,6 +31,7 @@ import requests
 import yaml
 
 from runner import load_providers, load_tasks, call_model, safe_slug
+from stats import wilson_interval
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -185,11 +187,12 @@ def cmd_hand_sample(args):
         sys.exit(f"No scored files in {scores_dir}")
 
     n = max(1, round(len(all_scores) * args.fraction))
-    sample = random.sample(all_scores, min(n, len(all_scores)))
+    rng = random.Random(args.seed)
+    sample = rng.sample(sorted(all_scores), min(n, len(all_scores)))
     print(f"Hand-grading {len(sample)}/{len(all_scores)} scored transcripts "
           f"({args.fraction:.0%} target).\n")
 
-    disagreements = 0
+    records = []
     for f in sample:
         with open(f, encoding="utf-8") as fh:
             scored = json.load(fh)
@@ -197,20 +200,43 @@ def cmd_hand_sample(args):
         print(f"model-graded score: {scored['score']:.2f}")
         print(f"source transcript: {scored['source_transcript']}")
         answer = input("Your score (0-1, or 'agree' to accept the model grade): ").strip()
-        if answer.lower() != "agree":
+        if answer.lower() == "agree":
+            hand_score = scored["score"]
+        else:
             try:
                 hand_score = float(answer)
             except ValueError:
                 print("not a number, treating as disagreement")
                 hand_score = None
-            if hand_score is None or abs(hand_score - scored["score"]) > 1e-6:
-                disagreements += 1
+        agree = hand_score is not None and abs(hand_score - scored["score"]) <= 1e-6
+        records.append({"file": f.name, "grader_model": scored.get("grader_model"),
+                        "model_score": scored["score"], "hand_score": hand_score, "agree": agree})
 
+    # Keep every hand grade, not just the rate, so agreement can be re-analysed
+    # later (report_stats.py --hand). A re-graded file replaces its old entry.
+    out = Path(args.out)
+    saved = []
+    if out.exists():
+        with open(out, encoding="utf-8") as fh:
+            saved = json.load(fh)
+    regraded = {r["file"] for r in records}
+    saved = [r for r in saved if r["file"] not in regraded] + records
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(saved, fh, indent=2)
+
+    disagreements = sum(not r["agree"] for r in records)
     rate = disagreements / len(sample)
-    print(f"\nDisagreement rate: {disagreements}/{len(sample)} = {rate:.0%}")
+    lo, hi = wilson_interval(disagreements, len(sample))
+    print(f"\nDisagreement rate: {disagreements}/{len(sample)} = {rate:.0%} "
+          f"(95% interval {lo:.0%} to {hi:.0%})")
+    print(f"Saved {len(records)} hand grades to {out} ({len(saved)} in total).")
     if rate > 0.20:
         print("Above 20% — per eval-spec.md, the automated scores aren't "
               "usable yet. Tighten the rubric before trusting them.")
+    elif hi > 0.20:
+        print("Below 20%, but the interval still reaches past it: too few hand "
+              "grades to call the automated scores usable yet.")
 
 
 def main():
@@ -237,6 +263,11 @@ def main():
     h = sub.add_parser("hand-sample")
     h.add_argument("--scores-dir", default="scores")
     h.add_argument("--fraction", type=float, default=0.15)
+    h.add_argument("--out", default="scores_hand/hand_grades.json",
+                    help="where hand grades are kept (appended; a re-graded file "
+                         "replaces its old entry)")
+    h.add_argument("--seed", type=int, default=None,
+                    help="fix the random sample, e.g. to re-grade the same files")
     h.set_defaults(func=cmd_hand_sample)
 
     args = ap.parse_args()
