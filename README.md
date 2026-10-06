@@ -11,11 +11,15 @@ rationale is in [eval-spec.md](eval-spec.md).
 /prompts      your extracted prompts, gitignored, never committed
 /runs         raw transcripts from runner.py, gitignored
 /scores       graded objective results
+/scores_gemini  the same transcripts scored by a second grader
+/scores_hand  your hand grades, saved by score_objective.py hand-sample
 /preference   blind pairwise votes
 /router       selection logic reading /scores and /preference
 providers.yaml    model/endpoint config for runner.py
 runner.py         sends task turns to models, saves transcripts
 score_objective.py  model-graded + hand-sample grading for research/documents
+stats.py            intervals, paired model comparisons, grader agreement (stdlib only)
+report_stats.py     puts those numbers on the saved scores; costs no tokens
 vote_pairwise.py     blind pairwise voting CLI for advisory/personal
 chat_vote.py         same protocol, driven from a chat session instead
 make_grading_bundle.py  builds a standalone HTML page for other people to vote in
@@ -58,6 +62,10 @@ python runner.py --task tasks/personal.yaml --providers groq --skip-existing
 python score_objective.py grade --task tasks/research.yaml \
     --grader-provider groq --grader-model openai/gpt-oss-120b
 python score_objective.py hand-sample --fraction 0.15
+
+# put intervals and grader agreement on what is already scored (no tokens)
+python report_stats.py scores --second scores_gemini
+python report_stats.py scores --hand scores_hand/hand_grades.json --out stats_report.md
 
 # blind pairwise vote between two advisory transcripts
 python vote_pairwise.py --transcripts runs/advisory_001__groq_A.json runs/advisory_001__openrouter_B.json \
@@ -238,6 +246,26 @@ What matters here is mostly not the numbers:
   measured*, and with n=4 and n=2 per model that gap is far too small to
   survive any grader noise at all.
 
+  The rates themselves are soft too. With 95% Wilson intervals
+  (`report_stats.py --second`), `documents` is 1/8 (2% to 47%) and overall
+  is 3/12 (9% to 53%). Neither can be placed on either side of the 20% line
+  yet, so "below the threshold" isn't established either.
+
+- **Kappa puts a number on how much the graders really agree.** Raw
+  agreement flatters a checklist where most criteria are met, because two
+  graders who both say "met" most of the time agree often by chance alone.
+  Cohen's kappa discounts that chance agreement:
+
+  | category  | criterion judgments | raw agreement | kappa |
+  |-----------|--------------------:|--------------:|------:|
+  | documents | 32                  | 94%           | 0.72  |
+  | research  | 14                  | 57%           | 0.14  |
+
+  0.72 is substantial agreement; 0.14 is barely above chance. The graders
+  did agree on every hard fail they both judged (kappa 1.00 on `research`),
+  but that is four transcripts, and the `hard_fail` bullet below shows the
+  same grader hard-failing a correct answer that only it judged.
+
 - **The two categories are not equally gradeable.** 12% disagreement on
   `documents` versus 50% on `research` is a large, consistent split, and it
   has an obvious explanation: documents criteria are largely structural
@@ -285,18 +313,24 @@ What matters here is mostly not the numbers:
   to 0.75 with no other input changed. Between that and the cross-grader
   disagreement above, a single automated pass is not evidence of anything on
   its own.
-- **n is far too small for any of this to be a ranking.** Four transcripts
-  per model for `documents`, two for `research`, one run each. The daily
-  token cap is what enforces that (see limitations), and it is why no
-  variance estimate exists. Every number above should be read as "this
-  pipeline runs and produces plausible output", not as a result.
+- **n is far too small for any of this to be a ranking, and now there is a
+  number on that.** Four transcripts per model for `documents`, two for
+  `research`, one run each; the daily token cap is what enforces that (see
+  limitations). `report_stats.py` compares every pair of models task by
+  task. None of the 12 pairs is distinguishable, and none could be: an exact
+  sign test can't get below p = 0.05 until at least 6 tasks separate two
+  models. gpt-oss-20b's lead over gpt-oss-120b on `documents` rests on a
+  single criterion flip, which is exactly how many transcripts the two
+  graders disagreed on there. Every number above should still be read as
+  "this pipeline runs and produces plausible output", not as a result.
 
 ## Grading
 
 Objective sets (`research.yaml`, `documents.yaml`): binary checklist per
 `eval-spec.md`, model-graded first pass, then hand-grade a random 15% and
-report the disagreement rate. Above ~20% disagreement the automated scores
-aren't usable.
+report the disagreement rate with its 95% interval. Above ~20% disagreement
+the automated scores aren't usable, and if the interval still crosses 20%
+there aren't enough hand grades yet to say either way.
 
 Advisory: blind pairwise only, on `held_position`, `specificity`,
 `context_retention`, `honesty`, `overall`. Model identities hidden until

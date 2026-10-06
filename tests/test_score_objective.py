@@ -164,3 +164,74 @@ def test_cmd_grade_skip_existing_leaves_a_recorded_score_alone(tmp_path, monkeyp
     assert m.call_count == 0
     after = json.loads(list(Path(scores).glob("*.json"))[0].read_text(encoding="utf-8"))
     assert after["score"] == 1.0
+
+
+# --- hand-sample -----------------------------------------------------------
+
+import argparse
+
+
+def _scored(d, name, score):
+    d.mkdir(exist_ok=True)
+    (d / name).write_text(json.dumps({"score": score, "source_transcript": name,
+                                      "grader_model": "g"}), encoding="utf-8")
+
+
+def _hand_args(scores_dir, out, fraction=1.0, seed=0):
+    return argparse.Namespace(scores_dir=str(scores_dir), fraction=fraction, out=str(out), seed=seed)
+
+
+def test_hand_sample_saves_every_grade_and_reports_an_interval(tmp_path, monkeypatch, capsys):
+    s = tmp_path / "scores"
+    _scored(s, "a.json", 1.0)
+    _scored(s, "b.json", 0.75)
+    answers = iter(["agree", "0.5"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    out = tmp_path / "hand" / "hand_grades.json"
+    score_objective.cmd_hand_sample(_hand_args(s, out))
+
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert len(saved) == 2
+    assert sum(r["agree"] for r in saved) == 1
+    agreed = [r for r in saved if r["agree"]][0]
+    assert agreed["hand_score"] == agreed["model_score"]
+    printed = capsys.readouterr().out
+    assert "Disagreement rate: 1/2 = 50% (95% interval" in printed
+    assert "Saved 2 hand grades" in printed
+
+
+def test_hand_sample_regrading_a_file_replaces_its_old_entry(tmp_path, monkeypatch):
+    s = tmp_path / "scores"
+    _scored(s, "a.json", 1.0)
+    out = tmp_path / "hand_grades.json"
+    monkeypatch.setattr("builtins.input", lambda _prompt: "0.0")
+    score_objective.cmd_hand_sample(_hand_args(s, out))
+    monkeypatch.setattr("builtins.input", lambda _prompt: "agree")
+    score_objective.cmd_hand_sample(_hand_args(s, out))
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert len(saved) == 1
+    assert saved[0]["agree"] is True
+
+
+def test_hand_sample_non_number_counts_as_disagreement(tmp_path, monkeypatch):
+    s = tmp_path / "scores"
+    _scored(s, "a.json", 1.0)
+    out = tmp_path / "hand_grades.json"
+    monkeypatch.setattr("builtins.input", lambda _prompt: "dunno")
+    score_objective.cmd_hand_sample(_hand_args(s, out))
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert saved[0]["hand_score"] is None and saved[0]["agree"] is False
+
+
+def test_hand_sample_with_a_seed_picks_the_same_files(tmp_path, monkeypatch):
+    s = tmp_path / "scores"
+    for i in range(10):
+        _scored(s, f"f{i}.json", 1.0)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "agree")
+    picks = []
+    for run in range(2):
+        out = tmp_path / f"h{run}.json"
+        score_objective.cmd_hand_sample(_hand_args(s, out, fraction=0.3, seed=7))
+        picks.append(sorted(r["file"] for r in json.loads(out.read_text(encoding="utf-8"))))
+    assert picks[0] == picks[1]
+    assert len(picks[0]) == 3
