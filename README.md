@@ -22,6 +22,8 @@ of thing you actually ask, and how sure that is.
 ```
 python replay.py sample                                  # nothing is sent
 #   open prompts/replay/review.html, untick anything, download the approval
+#   ...or skip the download and approve by the numbers on that page:
+python replay.py approve --drop 12,47 --add 160          # nothing is sent
 python replay.py run --approved approved_<id>.json --dry-run
 python replay.py run --approved approved_<id>.json       # builds pick.html
 #   open prompts/replay/pick.html:  ← A   → B   ↓ tie   X both bad
